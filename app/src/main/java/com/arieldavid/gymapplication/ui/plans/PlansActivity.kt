@@ -30,12 +30,18 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import com.arieldavid.gymapplication.local.database.DatabaseProvider
 import com.arieldavid.gymapplication.local.entity.MembresiaEntity
+import com.arieldavid.gymapplication.ui.plans.PlansRepository
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.WorkspacePremium
+import com.arieldavid.gymapplication.AuthClass
 
 @Serializable
 data class Membresia(
     val id_membresia: Int? = null,
     val nombre: String? = null,
-    val precio: Double? = null,
+    val precio_normal: Double? = null,
+    val precio_transferencia: Double? = null,
     val beneficio: String? =null
 )
 
@@ -45,25 +51,42 @@ fun PlanesScreen(navController: NavController) {
 
     val context = LocalContext.current
 
+    var idMembresiaActual by remember {
+        mutableStateOf<Int?>(null)
+    }
+
     var membresias by remember {
         mutableStateOf<List<Membresia>>(emptyList())
     }
 
+    val repository = remember {
+        PlansRepository()
+    }
+
     LaunchedEffect(Unit) {
 
-        val prefs = context.getSharedPreferences(
-            "auth",
-            Context.MODE_PRIVATE
-        )
-
-        val token = prefs.getString(
-            "access_token",
-            null
-        )
         val db = DatabaseProvider.getDatabase(context)
-        val dao = db.MembresiaDAO()
+
+        val cliente = withContext(Dispatchers.IO) {
+            db.clientDAO().getProfile()
+        }
+
+        idMembresiaActual = cliente?.idMembresia
+
+        // Primero cargar desde Room
+        membresias = repository.obtenerMembresiaLocal(context)
+
+        Log.d("PLANES", "ROOM -> ${membresias.size}")
+
+        val token = AuthClass.getAccessToken(context)
 
         if (token == null) {
+
+            // Si ya existen datos locales, seguimos trabajando offline
+            if (membresias.isNotEmpty()) {
+                Log.d("PLANES", "Modo offline")
+                return@LaunchedEffect
+            }
 
             navController.navigate("login") {
                 popUpTo(0)
@@ -74,63 +97,18 @@ fun PlanesScreen(navController: NavController) {
 
         try {
 
-            Log.d("PLANES", "ENTRO AL TRY")
+            // actualizarOnline() ya guarda en Room
+            membresias = repository.actualizarOnline(
+                context,
+                token
+            )
 
-            val json = withContext(Dispatchers.IO) {
-                MembresiaRepository.cargarMembresias()
-            }
-
-            Log.d("PLANES", "JSON: $json")
-
-            if (!json.isNullOrEmpty()) {
-
-                val lista = Json {
-                    ignoreUnknownKeys = true
-                }.decodeFromString<List<Membresia>>(json)
-
-                Log.d("PLANES", "LISTA PARSEADA: $lista")
-
-                membresias = lista
-
-                Log.d("PLANES", "STATE ACTUALIZADO")
-
-                withContext(Dispatchers.IO) {
-
-                    dao.insertAll(
-                        lista.map {
-
-                            Log.d("PLANES", "INSERTANDO: ${it.nombre}")
-
-                            MembresiaEntity(
-                                id_membresia = it.id_membresia ?: 0,
-                                nombre = it.nombre,
-                                precio = it.precio,
-                                beneficio = it.beneficio
-                            )
-                        }
-                    )
-                }
-            }
+            Log.d("PLANES", "ONLINE -> ${membresias.size}")
 
         } catch (e: Exception) {
 
-            Log.e("PLANES", "ERROR GENERAL", e)
+            Log.e("PLANES", "Error sincronizando", e)
 
-            val local = withContext(Dispatchers.IO) {
-                dao.getAll()
-            }
-
-            Log.d("PLANES", "LOCAL: $local")
-
-            membresias = local.map {
-
-                Membresia(
-                    id_membresia = it.id_membresia,
-                    nombre = it.nombre,
-                    precio = it.precio,
-                    beneficio = it.beneficio
-                )
-            }
         }
     }
 
@@ -143,39 +121,41 @@ fun PlanesScreen(navController: NavController) {
     ) {
 
         Text(
-            text = "MEMBERSHIP PLANS",
+            text = "Planes de Membresía",
             color = TextoPrincipal,
-            fontWeight = FontWeight.Black,
-            letterSpacing = 2.sp
+            style = MaterialTheme.typography.headlineLarge,
+            fontWeight = FontWeight.Bold
         )
 
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "Choose your discipline.",
-            color = TextoSecundario
+            text = "Elige el plan que mejor se adapte a tus objetivos.",
+            color = TextoSecundario,
+            style = MaterialTheme.typography.bodyMedium
         )
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        val basic = membresias.find {
-            it.id_membresia ==1
-        }
-
-        val premium = membresias.find {
-            it.id_membresia == 2
-        }
+        val basic = membresias.find { it.id_membresia == 1 }
+        val premium = membresias.find { it.id_membresia == 2 }
 
         basic?.let {
 
-            PlanCardBasic(it)
+            PlanCardBasic(
+                membresia = it,
+                esActual = it.id_membresia == idMembresiaActual
+            )
 
             Spacer(modifier = Modifier.height(16.dp))
         }
 
         premium?.let {
 
-            PlanCardPremium(it)
+            PlanCardPremium(
+                membresia = it,
+                esActual = it.id_membresia == idMembresiaActual
+            )
         }
     }
 }
@@ -183,7 +163,8 @@ fun PlanesScreen(navController: NavController) {
 
 @Composable
 fun PlanCardBasic(
-    membresia: Membresia
+    membresia: Membresia,
+    esActual: Boolean
 ) {
 
     Card(
@@ -195,23 +176,56 @@ fun PlanCardBasic(
         Column(
             modifier = Modifier.padding(16.dp)
         ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
 
-            Text(
-                "⚡ BASIC",
-                color = TextoSecundario
-            )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+
+                    Icon(
+                        imageVector = Icons.Default.Star,
+                        contentDescription = null,
+                        tint = TextoPrincipal
+                    )
+
+                    Text(
+                        text = "BÁSICO",
+                        color = TextoPrincipal,
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
+
+                if (esActual) {
+                    Text(
+                        text = "Tu membresía",
+                        color = TextoPrincipal,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
 
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                "$${membresia.precio}",
+                "Precio normal: $${membresia.precio_normal ?: 0.0}",
                 color = TextoPrincipal,
-                style = MaterialTheme.typography.headlineMedium,
+                style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
 
             Text(
-                "/MONTH",
+                "Transferencia: $${membresia.precio_transferencia ?: 0.0}",
+                color = TextoSecundario,
+                style = MaterialTheme.typography.bodyMedium
+            )
+
+            Text(
+                "/Mes",
                 color = TextoSecundario
             )
 
@@ -223,31 +237,18 @@ fun PlanCardBasic(
             )
 
             Spacer(modifier = Modifier.height(16.dp))
-
-            Button(
-                onClick = {},
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.Gray
-                )
-            ) {
-
-                Text(
-                    "SELECT PLAN",
-                    color = Color.Black
-                )
-            }
         }
     }
 }
 @Composable
 fun PlanCardPremium(
-    membresia: Membresia
+    membresia: Membresia,
+    esActual: Boolean
 ) {
 
     Card(
         colors = CardDefaults.cardColors(
-            containerColor = Color.LightGray
+            containerColor = Color(0xFF303030)
         ),
 
         shape = RoundedCornerShape(20.dp),
@@ -260,59 +261,67 @@ fun PlanCardPremium(
         ) {
 
             Row(
-                horizontalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
 
-                Text(
-                    "⚡ PREMIUM",
-                    color = Color.Black
-                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
 
-                Text(
-                    "MOST POPULAR",
-                    color = Color.Black,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                    Icon(
+                        imageVector = Icons.Default.WorkspacePremium,
+                        contentDescription = null,
+                        tint = Color(0xFFFFD700)
+                    )
+
+                    Text(
+                        text = "PREMIUM",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
+
+                if (esActual) {
+                    Text(
+                        text = "Tu membresía",
+                        color = Color(0xFFE0E0E0),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                "$${membresia.precio}",
-                color = Color.Black,
-                style = MaterialTheme.typography.headlineMedium,
+                "Precio normal: $${membresia.precio_normal ?: 0.0}",
+                color = Color.White,
+                style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
 
             Text(
-                "/MONTH",
-                color = Color.DarkGray
+                "Transferencia: $${membresia.precio_transferencia ?: 0.0}",
+                color = Color(0xFFBDBDBD),
+                style = MaterialTheme.typography.bodyMedium
+            )
+
+            Text(
+                "/Mes",
+                color = Color(0xFFAAAAAA)
             )
 
             Spacer(modifier = Modifier.height(12.dp))
 
             Text(
                 "• ${membresia.beneficio}",
-                color = Color.DarkGray
+                color = Color(0xFFAAAAAA)
             )
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            Button(
-                onClick = {},
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.Black
-                )
-            ) {
-
-                Text(
-                    "UPGRADE NOW",
-                    color = Color.White
-                )
-            }
         }
     }
 }

@@ -1,12 +1,23 @@
 
 package com.arieldavid.gymapplication.ui.home
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.FitnessCenter
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.QrCodeScanner
 import android.content.Context
+import android.os.Build
 import android.util.Log
+import android.widget.Toast
+import com.arieldavid.gymapplication.ui.profile.MembershipCard
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.annotation.RequiresApi
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.Payment
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -26,51 +37,82 @@ import androidx.compose.ui.platform.LocalContext
 import com.arieldavid.gymapplication.ui.colores.*
 import com.arieldavid.gymapplication.ui.theme.GymApplicationTheme
 import androidx.compose.runtime.*
+import com.arieldavid.gymapplication.AuthClass
 import com.arieldavid.gymapplication.SupabaseConfig
+import com.arieldavid.gymapplication.local.QrLocal.LocalQrRepository
+import com.arieldavid.gymapplication.local.QrLocal.SpringRepository
 import com.arieldavid.gymapplication.local.database.DatabaseProvider
 import com.arieldavid.gymapplication.local.entity.ClientEntity
+import com.arieldavid.gymapplication.repository.TrainerRepository
+import com.arieldavid.gymapplication.ui.EntradasRepository
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
+import java.text.SimpleDateFormat
+import java.time.LocalDate
+import java.util.Locale
 
 
 // 🔥 HOME
+@RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun HomeScreen(navController: NavController) {
     val context = LocalContext.current
+
+
+
+
     var fechaPago by remember {
         mutableStateOf("-")
     }
 
-    var loadingPago by remember {
-        mutableStateOf(true)
-    }
-    var cargado by remember {
-        mutableStateOf(false)
-    }
 
+    val repository = remember {
+        HomeRepository()
+    }
 
     LaunchedEffect(Unit) {
 
-            if (cargado) return@LaunchedEffect
+        //////////////////////////////////////////////////////
+        // 1. CARGAR ROOM
+        //////////////////////////////////////////////////////
 
-            cargado = true
-
-
+        fechaPago = repository.obtenerFechaPagoLocal(context)
 
         val prefs = context.getSharedPreferences(
             "auth",
             Context.MODE_PRIVATE
         )
 
-        val token = prefs.getString("access_token", null)
+        //////////////////////////////////////////////////////
+        // 2. TOKEN
+        //////////////////////////////////////////////////////
 
-        val db = DatabaseProvider.getDatabase(context)
-        val dao = db.clientDAO()
+        val token = AuthClass.getAccessToken(context)
 
-        if (token == null) {
+        val userId = prefs.getString(
+            "user_id",
+            null
+        )
+
+        //////////////////////////////////////////////////////
+        // 3. MODO OFFLINE
+        //////////////////////////////////////////////////////
+
+        if (token == null || userId == null) {
+
+            if (fechaPago != "-") {
+
+                Log.d("HOME", "Modo offline")
+
+                return@LaunchedEffect
+            }
 
             navController.navigate("login") {
                 popUpTo(0)
@@ -79,87 +121,22 @@ fun HomeScreen(navController: NavController) {
             return@LaunchedEffect
         }
 
+        //////////////////////////////////////////////////////
+        // 4. SINCRONIZAR ONLINE
+        //////////////////////////////////////////////////////
+
         try {
 
-            val client = OkHttpClient()
-            Log.d("PERFIL", "ENTRO AL TRY")
-
-            val userId = prefs.getString("user_id", null)
-
-            val request = Request.Builder()
-                .url(
-                    "${SupabaseConfig.URL}/rest/v1/Clientes?user_id=eq.$userId&select=Payment(fecha_sig_pago)"
-                )
-                .addHeader("apikey", SupabaseConfig.API_KEY)
-                .addHeader("Authorization", "Bearer $token")
-                .build()
-            Log.d("PERFIL", "REQUEST CREADO")
-
-            val response = withContext(Dispatchers.IO) {
-                client.newCall(request).execute()
-            }
-            Log.d("PERFIL", "HTTP CODE: ${response.code}")
-
-
-            val body = response.body?.string()
-
-            println(body)
-
-            if (!body.isNullOrEmpty()) {
-
-                val jsonArray = JSONArray(body)
-
-                if (jsonArray.length() > 0) {
-
-                    val cliente = jsonArray.getJSONObject(0)
-
-                    val payments = cliente.getJSONArray("Payment")
-
-                    if (payments.length() > 0) {
-
-                        fechaPago = payments
-                            .getJSONObject(0)
-                            .optString("fecha_sig_pago", "-")
-                    }
-
-                           withContext(Dispatchers.IO) {
-
-                        val actual = dao.getProfile()
-
-                        if (actual != null) {
-                            dao.insert(
-                                ClientEntity(
-                                    uuid = actual.uuid,
-                                    nombre = actual.nombre,
-                                    telefono = actual.telefono,
-                                    email = actual.email,
-                                    idMembresia = actual.idMembresia,
-                                    numeroCliente = actual.numeroCliente,
-                                    fechaSigPago = fechaPago
-                                )
-                            )
-                        }
-                    }
-                }
-            }
-            Log.d("PERFIL", "BODY: $body")
-
+            fechaPago = repository.obtenerFechaPago(
+                context,
+                token,
+                userId
+            )
 
         } catch (e: Exception) {
-            val local = withContext(Dispatchers.IO) {
-                dao.getProfile()
-            }
 
-            if (local != null) {
-                fechaPago = local.fechaSigPago ?: "-"
-            }
+            Log.e("HOME", "Error sincronizando", e)
 
-
-            Log.e(
-                "PERFIL",
-                "ERROR: ${e.message}"
-            )
-            e.printStackTrace()
         }
     }
 
@@ -180,15 +157,23 @@ fun HomeScreen(navController: NavController) {
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        StatsRow(fechaPago)
 
-        Spacer(modifier = Modifier.height(30.dp))
+        Spacer(
+            modifier = Modifier.height(16.dp)
+        )
 
-        QRSection()
+        MembershipCard(
+            fechaPago = fechaPago
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        QRSection(fechaPago = fechaPago)
 
         Spacer(modifier = Modifier.height(30.dp))
     }
-}
+    }
+
 
 //////////////////////////////////////////////////////////
 // 🔝 TOP BAR (SIN ICONS)
@@ -237,179 +222,548 @@ fun Greeting() {
     Column {
 
         Text(
-            "Hola $nombre 👋",
-            color = TextoPrincipal,
-            style = MaterialTheme.typography.headlineLarge,
-            fontWeight = FontWeight.Bold
+            text = "¡Hola, $nombre!",
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+            color = TextoPrincipal
         )
+
+        Spacer(modifier = Modifier.height(4.dp))
 
         Text(
-            "¿Listo para superar tus límites hoy?",
-            color = TextoSecundario
+            text = "Bienvenido nuevamente al gimnasio.",
+            color = TextoSecundario,
+            style = MaterialTheme.typography.bodyMedium
         )
     }
 }
 
-//////////////////////////////////////////////////////////
-// 📊 STATS
-//////////////////////////////////////////////////////////
-@Composable
-fun StatsRow(fechaPago: String) {
-    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
 
-        StatCardModern(
-            titulo = "RACHA",
-            valor = "12",
-            subtitulo = "DÍAS SEGUIDOS",
-            emoji = "🔥",
-            modifier = Modifier.weight(1f)
-        )
 
-        StatCardModern(
-            titulo = "PAGO",
-            valor = fechaPago,
-            subtitulo = "PROXIMO PAGO",
-            emoji = "💳",
-            modifier = Modifier.weight(1f)
-        )
-    }
-}
-
-@Composable
-fun StatCardModern(
-    titulo: String,
-    valor: String,
-    subtitulo: String,
-    emoji: String,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        modifier = modifier.aspectRatio(1f),
-        colors = CardDefaults.cardColors(containerColor = Cards),
-        shape = RoundedCornerShape(20.dp)
-    ) {
-
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp)
-        ) {
-
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(emoji)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(titulo, color = TextoSecundario)
-            }
-
-            Spacer(modifier = Modifier.weight(1f))
-
-            Text(
-                valor,
-                color = TextoPrincipal,
-                style = MaterialTheme.typography.headlineLarge,
-                fontWeight = FontWeight.Bold
-            )
-
-            Text(subtitulo, color = TextoSecundario)
-        }
-    }
-}
 
 //////////////////////////////////////////////////////////
 // 🎯 QR
 //////////////////////////////////////////////////////////
+@RequiresApi(Build.VERSION_CODES.O)
 @Composable
-fun QRSection() {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-
-        Button(
-            onClick = {},
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(60.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Color.LightGray),
-            shape = RoundedCornerShape(8.dp)
-        ) {
-            Text("ESCANEAR QR", color = Color.Black, fontWeight = FontWeight.Bold)
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Text(
-            "PULSA PARA REGISTRAR TU ENTRADA",
-            color = TextoSecundario,
-            style = MaterialTheme.typography.labelSmall
-        )
+fun QRSection(
+    fechaPago: String
+) {
+    var mostrarDialogo by remember {
+        mutableStateOf(false)
     }
-}
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val scanLauncher = rememberLauncherForActivityResult(
+        contract = ScanContract()
+    ) { result ->
+
+        Log.d("QR_DEBUG", "Callback ejecutado")
+
+        if (result.contents != null) {
+
+            Log.d("QR_DEBUG", "QR LEIDO: ${result.contents}")
+
+            if (result.contents == "ALTAPINTA") {
+
+                Log.d("QR_DEBUG", "QR CORRECTO")
+
+                scope.launch {
+
+                    val prefs = context.getSharedPreferences(
+                        "auth",
+                        Context.MODE_PRIVATE
+                    )
+
+                    val token = prefs.getString("access_token", "") ?: ""
+                    val idCliente = prefs.getString("id_clientes", null)
+
+                    if (idCliente == null) {
+
+                        Toast.makeText(
+                            context,
+                            "Usuario no identificado",
+                            Toast.LENGTH_LONG
+                        ).show()
+
+                        return@launch
+                    }
+
+                    //=================== INTENTAR SPRING ===================
+
+                    try {
+
+                        val respuesta = withContext(Dispatchers.IO) {
+
+                            LocalQrRepository.procesarQR(
+                                qr = result.contents,
+                                idCliente = idCliente
+                            )
+                        }
+
+                        Log.d("QR", "OK: ${respuesta.ok}")
+                        Log.d("QR", "MENSAJE: ${respuesta.mensaje}")
+
+                        if (respuesta.ok) {
+
+                            Toast.makeText(
+                                context,
+                                "Bienvenido ${respuesta.nombre}",
+                                Toast.LENGTH_LONG
+                            ).show()
+
+                        } else {
+
+                            Toast.makeText(
+                                context,
+                                respuesta.mensaje,
+                                Toast.LENGTH_LONG
+                            ).show()
+
+                            if (respuesta.mensaje == "Solicitud enviada") {
+
+                                repeat(120) { // Espera como máximo 1 minuto (120 x 500 ms)
+
+                                    delay(500)
+
+                                    val estado = try {
+
+                                        withContext(Dispatchers.IO) {
+                                            SpringRepository.obtenerEstadoSolicitud(idCliente)
+                                        }
+
+                                    } catch (e: Exception) {
+
+                                        Toast.makeText(
+                                            context,
+                                            "Error consultando la solicitud",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+
+                                        return@launch
+                                    }
+
+                                    Log.d("SOLICITUD", "Estado: $estado")
+
+                                    when (estado?.trim()) {
+
+                                        "PENDIENTE",
+                                        "EN_REVISION" -> {
+                                            // Sigue esperando
+                                        }
+
+                                        "ACEPTADA" -> {
+
+                                            Toast.makeText(
+                                                context,
+                                                "✅ Entrada aprobada. ¡Bienvenido!",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+
+                                            return@launch
+                                        }
+
+                                        "RECHAZADA" -> {
+
+                                            Toast.makeText(
+                                                context,
+                                                "❌ Solicitud rechazada",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+
+                                            return@launch
+                                        }
+
+                                        else -> {
+
+                                            Toast.makeText(
+                                                context,
+                                                "Estado desconocido: $estado",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+
+                                            return@launch
+                                        }
+                                    }
+                                }
+
+                                Toast.makeText(
+                                    context,
+                                    "La solicitud expiró. Inténtalo nuevamente.",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+
+                        // Si Spring respondió correctamente,
+                        // no seguimos con Supabase.
+                        return@launch
+
+                    } catch (e: Exception) {
+
+                        Log.e("QR_LOCAL", "Servidor local no disponible", e)
+                    }
+
+                    //=================== RESPALDO SUPABASE ===================
+
+                    try {
+
+                        if (token.isBlank()) {
+
+                            Toast.makeText(
+                                context,
+                                "Sesión inválida",
+                                Toast.LENGTH_LONG
+                            ).show()
+
+                            return@launch
+                        }
+
+                        val yaEntro = withContext(Dispatchers.IO) {
+                            EntradasRepository.yaEntroHoy(token, idCliente)
+                        }
+
+                        if (yaEntro) {
+
+                            Toast.makeText(
+                                context,
+                                "Ya registraste tu entrada hoy",
+                                Toast.LENGTH_LONG
+                            ).show()
+
+                            return@launch
+                        }
+
+                        val estaEnTurno = try {
+
+                            withContext(Dispatchers.IO) {
+                                EntradasRepository.verificarTurnoCliente(token, idCliente)
+                            }
+
+                        } catch (e: Exception) {
+
+                            if (e.message == "GIMNASIO_CERRADO") {
+
+                                Toast.makeText(
+                                    context,
+                                    "El gimnasio está cerrado",
+                                    Toast.LENGTH_LONG
+                                ).show()
+
+                                return@launch
+                            }
+
+                            throw e
+                        }
+
+                        if (!estaEnTurno) {
+
+                            val existe = withContext(Dispatchers.IO) {
+                                EntradasRepository.existeSolicitudPendiente(
+                                    token,
+                                    idCliente
+                                )
+                            }
+
+                            if (!existe) {
+
+                                withContext(Dispatchers.IO) {
+                                    EntradasRepository.crearSolicitudEntrada(
+                                        token,
+                                        idCliente
+                                    )
+                                }
+
+                                Toast.makeText(
+                                    context,
+                                    "Solicitud enviada",
+                                    Toast.LENGTH_LONG
+                                ).show()
+
+                            } else {
+
+                                Toast.makeText(
+                                    context,
+                                    "Ya existe una solicitud pendiente",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+
+                            repeat(120) {
+
+                                delay(1000)
+
+                                val estado = try {
+
+                                    withContext(Dispatchers.IO) {
+                                        EntradasRepository.obtenerEstadoSolicitud(
+                                            token,
+                                            idCliente
+                                        )
+                                    }
+
+                                } catch (e: Exception) {
+
+                                    Toast.makeText(
+                                        context,
+                                        "Error consultando la solicitud",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+
+                                    return@launch
+                                }
+
+                                Log.d("SOLICITUD", "Estado: $estado")
+
+                                when (estado?.trim()) {
+
+                                    "PENDIENTE",
+                                    "EN_REVISION" -> {
+                                        // Sigue esperando
+                                    }
+
+                                    "ACEPTADA" -> {
+
+                                        Toast.makeText(
+                                            context,
+                                            "✅ Entrada aprobada. ¡Bienvenido!",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+
+                                        return@launch
+                                    }
+
+                                    "RECHAZADA" -> {
+
+                                        Toast.makeText(
+                                            context,
+                                            "❌ Solicitud rechazada",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+
+                                        return@launch
+                                    }
+
+                                    else -> {
+
+                                        Toast.makeText(
+                                            context,
+                                            "Estado desconocido: $estado",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+
+                                        return@launch
+                                    }
+                                }
+                            }
+
+                            Toast.makeText(
+                                context,
+                                "La solicitud expiró.",
+                                Toast.LENGTH_LONG
+                            ).show()
+
+                            return@launch
+                        }
+
+                        val ok = withContext(Dispatchers.IO) {
+                            EntradasRepository.registrarEntrada(
+                                token,
+                                idCliente
+                            )
+                        }
+
+                        Toast.makeText(
+                            context,
+                            if (ok)
+                                "Entrada registrada correctamente"
+                            else
+                                "Error registrando entrada",
+                            Toast.LENGTH_LONG
+                        ).show()
+
+                    } catch (e: Exception) {
+
+                        Log.e("SUPABASE", "ERROR", e)
+
+                        Toast.makeText(
+                            context,
+                            "No fue posible registrar la entrada",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+
+                }
+
+            } else {
+
+                Log.d("QR", "ESCANEO CANCELADO")
+            }
+        }
+        }
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+
+            Button(
+                onClick = {
+                    val hoy = LocalDate.now()
+
+                    val fechaVencimiento = try {
+                        LocalDate.parse(fechaPago)
+                    } catch (e: Exception) {
+                        null
+                    }
+
+                    if (fechaVencimiento != null && fechaVencimiento.isBefore(hoy)) {
+
+                        mostrarDialogo = true
+                        return@Button
+                    }
 
 
-//////////////////////////////////////////////////////////
+                    val options = ScanOptions().apply {
+                        setPrompt("Escanea el código QR")
+                        setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                        setBeepEnabled(true)
+                        setOrientationLocked(true)
+                        captureActivity = PortraitCaptureActivity::class.java
+                    }
+                    scanLauncher.launch(options)
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(60.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color.LightGray),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text("Escanear código QR", color = Color.Black, fontWeight = FontWeight.Bold)
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                "PULSA PARA REGISTRAR TU ENTRADA",
+                color = TextoSecundario,
+                style = MaterialTheme.typography.labelSmall
+            )
+
+            if (mostrarDialogo) {
+
+                AlertDialog(
+                    onDismissRequest = {
+                        mostrarDialogo = false
+                    },
+                    title = {
+                        Text("Membresía vencida")
+                    },
+                    text = {
+                        Text(
+                            "Tu membresía se encuentra vencida.\n\n" +
+                                    "Para registrar tu entrada debes realizar el pago en la administración del gimnasio."
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                mostrarDialogo = false
+                            }
+                        ) {
+                            Text("Entendido")
+                        }
+                    }
+                )
+            }
+        }
+    }
+
+
+    //////////////////////////////////////////////////////////
 // 🔽 BOTTOM BAR (SIN ICONS)
 //////////////////////////////////////////////////////////
-@Composable
-fun BottomBar(navController: NavController) {
+    @Composable
+    fun BottomBar(navController: NavController) {
 
-    val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
+        val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
 
-    NavigationBar(containerColor = MainBackground) {
+        NavigationBar(containerColor = MainBackground) {
 
-        NavigationBarItem(
-            selected = currentRoute == "home",
-            onClick = {
-                navController.navigate("home") {
-                    popUpTo("home")
-                    launchSingleTop = true
-                }
-            },
-            icon = { Text("🏠") },
-            label = { Text("HOME") }
-        )
+            NavigationBarItem(
+                selected = currentRoute == "home",
+                onClick = {
+                    navController.navigate("home") {
+                        popUpTo("home")
+                        launchSingleTop = true
+                    }
+                },
+                icon = {
+                    Icon(
+                        imageVector = Icons.Default.Home,
+                        contentDescription = "Home"
+                    )
+                },
+                label = { Text("HOME") }
+            )
 
-        NavigationBarItem(
-            selected = currentRoute == "planes",
-            onClick = {
-                navController.navigate("planes") {
-                    popUpTo("home")
-                    launchSingleTop = true
-                }
-            },
-            icon = { Text("🏋️") },
-            label = { Text("PLANS") }
-        )
+            NavigationBarItem(
+                selected = currentRoute == "planes",
+                onClick = {
+                    navController.navigate("planes") {
+                        popUpTo("home")
+                        launchSingleTop = true
+                    }
+                },
+                icon = {
+                    Icon(
+                        Icons.Default.Payment,
+                        contentDescription = "Plans"
+                    )
+                },
+                label = { Text("PLANS") }
+            )
 
-        NavigationBarItem(
-            selected = currentRoute == "entrenadores",
-            onClick = {
-                navController.navigate("entrenadores") {
-                    popUpTo("home")
-                    launchSingleTop = true
-                }
-            },
-            icon = { Text("🎯") },
-            label = { Text("TRAINERS") }
-        )
+            NavigationBarItem(
+                selected = currentRoute == "entrenadores",
+                onClick = {
+                    navController.navigate("entrenadores") {
+                        popUpTo("home")
+                        launchSingleTop = true
+                    }
+                },
+                icon = {
+                    Icon(
+                        imageVector = Icons.Default.FitnessCenter,
+                        contentDescription = "TRAINER"
+                    )
+                },
+                label = { Text("TRAINERS") }
+            )
 
-        NavigationBarItem(
-            selected = currentRoute == "yo",
-            onClick = {
-                navController.navigate("yo") {
-                    popUpTo("home")
-                    launchSingleTop = true
-                }
-            },
-            icon = { Text("👤") },
-            label = { Text("PROFILE") }
-        )
+            NavigationBarItem(
+                selected = currentRoute == "yo",
+                onClick = {
+                    navController.navigate("yo") {
+                        popUpTo("home")
+                        launchSingleTop = true
+                    }
+                },
+                icon = {
+                    Icon(
+                        Icons.Default.Person,
+                        contentDescription = "Profile"
+                    )
+                },
+                label = { Text("PROFILE") }
+            )
+        }
     }
-}
-//////////////////////////////////////////////////////////
+
+    //////////////////////////////////////////////////////////
 // 👀 PREVIEW
 //////////////////////////////////////////////////////////
-@Preview(showBackground = true, showSystemUi = true)
-@Composable
-fun mostrar() {
-    GymApplicationTheme {
-        HomeScreen(navController = rememberNavController())
+    @RequiresApi(Build.VERSION_CODES.O)
+    @Preview(showBackground = true, showSystemUi = true)
+    @Composable
+    fun mostrar() {
+        GymApplicationTheme {
+            HomeScreen(navController = rememberNavController())
+        }
     }
-}

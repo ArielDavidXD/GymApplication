@@ -12,7 +12,7 @@ object PerfilRepository {
     suspend fun cargarPerfil(token: String, userId: String): String? {
         return withContext(kotlinx.coroutines.Dispatchers.IO) {
 
-            val url = "${SupabaseConfig.URL}/rest/v1/Clientes?user_id=eq.$userId&select=*,Payment(*)"
+            val url = "${SupabaseConfig.URL}/rest/v1/Clientes?user_id=eq.$userId&select=id_clientes,nombre,telefono,email,id_membresia,numero_cliente,Payment(fecha_sig_pago)"
 
             Log.d("PERFIL_DEBUG", "USER ID: $userId")
             Log.d("PERFIL_DEBUG", "URL: $url")

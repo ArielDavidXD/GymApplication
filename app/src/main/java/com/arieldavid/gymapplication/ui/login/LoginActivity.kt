@@ -1,4 +1,5 @@
 import android.content.Context
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,9 +16,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,18 +37,33 @@ import com.arieldavid.gymapplication.ui.colores.TextoSecundario
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.input.VisualTransformation
 import com.arieldavid.gymapplication.AuthClass
+import com.journeyapps.barcodescanner.CaptureActivity
 import kotlinx.coroutines.launch
+import java.net.ConnectException
+import java.net.UnknownHostException
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.Icon
 
 @Composable
 fun LoginScreen(navController: NavController) {
 
 
-
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+
+    var mostrarPassword by remember {
+        mutableStateOf(false)
+    }
+
     var error by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(false) }
+    var usuarioEliminado by remember {
+        mutableStateOf(false)
+    }
 
     var recordar by remember {
         mutableStateOf(false)
@@ -145,7 +163,8 @@ fun LoginScreen(navController: NavController) {
                 value = email,
                 onValueChange = {
                     email = it
-                    error = false // 👈 limpia error al escribir
+                    error = false
+                    usuarioEliminado = false
                 },
                 placeholder = { Text("example@email.com") },
                 modifier = Modifier.fillMaxWidth(),
@@ -169,10 +188,40 @@ fun LoginScreen(navController: NavController) {
                 onValueChange = {
                     password = it
                     error = false
+                    usuarioEliminado = false
                 },
-                placeholder = { Text("••••••••") },
+
+                placeholder = {
+                    Text("••••••••")
+                },
+
                 modifier = Modifier.fillMaxWidth(),
-                visualTransformation = PasswordVisualTransformation(),
+
+                visualTransformation =
+                if (mostrarPassword)
+                    VisualTransformation.None
+                else
+                    PasswordVisualTransformation(),
+
+                trailingIcon = {
+
+                    IconButton(
+                        onClick = {
+                            mostrarPassword = !mostrarPassword
+                        }
+                    ) {
+
+                        Icon(
+                            imageVector =
+                            if (mostrarPassword)
+                                Icons.Default.Visibility
+                            else
+                                Icons.Default.VisibilityOff,
+                            contentDescription = null
+                        )
+                    }
+                },
+
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = Color.Gray,
                     unfocusedBorderColor = Color.DarkGray,
@@ -199,13 +248,34 @@ fun LoginScreen(navController: NavController) {
                     "Recordarme",
                     color = Color.White
                 )
+
+//                TextButton(
+//                    onClick = {
+//                        navController.navigate("recuperar")
+//                    }
+//                ) {
+//
+//                    Text(
+//                        "¿Olvidaste tu contraseña?"
+//                    )
+//                }
+            }
+            if (usuarioEliminado) {
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = "Su usuario ha sido eliminado. Para más información póngase en contacto con la administración del gimnasio.",
+                    color = Color.Red,
+                    fontSize = 15.sp
+                )
             }
 
             if (error) {
                 Text(
-                    text = "Invalid email or password",
+                    text = "Email o contraseña incorrecta",
                     color = Color.Red,
-                    fontSize = 12.sp
+                    fontSize = 15.sp
                 )
             }
 
@@ -217,50 +287,96 @@ fun LoginScreen(navController: NavController) {
                         loading = true
                         try {
 
-                            val success = AuthClass.login(context, email, password)
-                            if (success) {
+                            val result = AuthClass.login(
+                                context,
+                                email,
+                                password
+                            )
 
-                                val prefs = context.getSharedPreferences(
-                                    "auth",
-                                    Context.MODE_PRIVATE
-                                )
-                                if (recordar) {
+                            when (result) {
 
-                                    prefs.edit()
-                                        .putBoolean("recordar", true)
-                                        .putString("saved_email", email)
-                                        .putString("saved_password", password)
-                                        .apply()
+                                AuthClass.LoginResult.SUCCESS -> {
 
-                                } else {
+                                    val prefs = context.getSharedPreferences(
+                                        "auth",
+                                        Context.MODE_PRIVATE
+                                    )
 
-                                    prefs.edit()
-                                        .remove("saved_email")
-                                        .remove("saved_password")
-                                        .putBoolean("recordar", false)
-                                        .apply()
+                                    if (recordar) {
+
+                                        prefs.edit()
+                                            .putBoolean("recordar", true)
+                                            .putString("saved_email", email)
+                                            .putString("saved_password", password)
+                                            .apply()
+
+                                    } else {
+
+                                        prefs.edit()
+                                            .remove("saved_email")
+                                            .remove("saved_password")
+                                            .putBoolean("recordar", false)
+                                            .apply()
+                                    }
+
+                                    navController.navigate("home") {
+                                        popUpTo("login") {
+                                            inclusive = true
+                                        }
+                                    }
                                 }
 
-                                navController.navigate("home") {
-                                    popUpTo("login") { inclusive = true }
+                                AuthClass.LoginResult.INVALID_CREDENTIALS -> {
+
+                                    error = true
                                 }
+
+                                AuthClass.LoginResult.ELIMINADO -> {
+
+                                    usuarioEliminado = true
+
+                                }
+                            }
+
+                        } catch (e: Exception) {
+
+                            e.printStackTrace()
+
+                            if (
+                                e is UnknownHostException ||
+                                e is ConnectException
+                            ) {
+
+                                Toast.makeText(
+                                    context,
+                                    "No hay conexión a internet",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+
                             } else {
+
                                 error = true
                             }
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                            error = true
                         }
+
                         loading = false
                     }
                 },
-                    enabled = !loading, // 👈 evita spam
+
+                enabled = !loading,
+
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(55.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color.LightGray),
+
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color.LightGray
+                ),
+
                 shape = RoundedCornerShape(4.dp)
+
             ) {
+
                 Text(
                     if (loading) "LOADING..." else "LOGIN",
                     color = Color.Black,
@@ -270,4 +386,6 @@ fun LoginScreen(navController: NavController) {
             }
         }
     }
+
+
 }

@@ -8,8 +8,8 @@ data class MembresiaEntity(
 
     @PrimaryKey
     val id_membresia: Int,
-
     val nombre: String?,
-    val precio: Double?,
+    val precio_normal: Double?,
+    val precio_transferencia: Double?,
     val beneficio: String?
 )
