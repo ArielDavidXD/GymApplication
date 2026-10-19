@@ -1,14 +1,6 @@
 package com.arieldavid.gymapplication
 
-import androidx.work.ExistingPeriodicWorkPolicy
-import androidx.work.PeriodicWorkRequestBuilder
-import androidx.work.WorkManager
-import com.arieldavid.gymapplication.workers.NotificacionWorker
-import java.util.concurrent.TimeUnit
 import android.Manifest
-import LoginScreen
-import NuevaPasswordScreen
-import RecuperarPasswordScreen
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -17,7 +9,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.compose.NavHost
@@ -25,7 +19,6 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.arieldavid.gymapplication.local.QrLocal.LocalApi
-import com.arieldavid.gymapplication.local.QrLocal.NetworkScanner
 import com.arieldavid.gymapplication.local.QrLocal.SpringRepository
 import com.arieldavid.gymapplication.ui.colores.MainBackground
 import com.arieldavid.gymapplication.ui.home.BottomBar
@@ -38,96 +31,231 @@ import com.arieldavid.gymapplication.ui.theme.GymApplicationTheme
 import com.arieldavid.gymapplication.ui.trainers.TrainerScreen
 import kotlinx.coroutines.launch
 
+import LoginScreen
+import NuevaPasswordScreen
+import RecuperarPasswordScreen
+import com.arieldavid.gymapplication.local.QrLocal.NetworkScanner
+
 class MainActivity : ComponentActivity() {
+
+    private var servidorListo by mutableStateOf(false)
+
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        lifecycleScope.launch {
-            SpringRepository.actualizarIp("192.168.1.106")
-            LocalApi.actualizarIp("192.168.1.106")
 
-            Log.d("SERVER", "IP fija configurada")
+        // Si hay una IP guardada, se configura al instante (sin red) para que
+// las pantallas puedan usar LocalApi desde el primer momento.
+        getSharedPreferences("server", MODE_PRIVATE)
+            .getString("server_ip", null)
+            ?.let { aplicarIp(it) }
+
+// Y se verifica / busca en segundo plano
+        lifecycleScope.launch {
+
+            val ip = NetworkScanner.buscarServidor(this@MainActivity)
+
+            if (ip != null) {
+                aplicarIp(ip)
+                servidorListo = true
+                Log.d("SERVER", "Servidor GYM: $ip")
+            } else {
+                servidorListo = false
+                Log.d("SERVER", "Servidor GYM no encontrado")
+            }
         }
+
+
+
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+
             requestPermissions(
-                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                arrayOf(
+                    Manifest.permission.POST_NOTIFICATIONS
+                ),
                 100
             )
+
         }
+
 
         NotificationHelper.createChannel(this)
 
-// Programar el Worker (una sola vez)
         WorkScheduler.schedule(this)
+
 
         enableEdgeToEdge()
 
+
+
         setContent {
+
 
             GymApplicationTheme {
 
+
                 val navController = rememberNavController()
+
+
                 val currentRoute =
-                    navController.currentBackStackEntryAsState().value?.destination?.route
+                    navController
+                        .currentBackStackEntryAsState()
+                        .value
+                        ?.destination
+                        ?.route
 
-                val prefs = getSharedPreferences(
-                    "auth",
-                    MODE_PRIVATE
-                )
 
-                val token = prefs.getString(
-                    "access_token",
+
+                val prefs =
+                    getSharedPreferences(
+                        "auth",
+                        MODE_PRIVATE
+                    )
+
+
+                val token =
+                    prefs.getString(
+                        "access_token",
+                        null
+                    )
+
+
+                val clienteVinculado = prefs.getString(
+                    "linked_client_id",
                     null
                 )
 
+
+
                 Scaffold(
+
                     containerColor = MainBackground,
+
+
                     bottomBar = {
+
                         if (currentRoute != "login") {
+
                             BottomBar(navController)
+
                         }
+
                     }
+
+
                 ) { padding ->
 
+
+
                     NavHost(
+
                         navController = navController,
-                        startDestination = if (token != null) "home" else "login",
-                        modifier = Modifier.padding(padding)
+
+                        startDestination =
+                        if (token != null || clienteVinculado != null) {
+                            "home"
+                        } else {
+                            "login"
+                        },
+
+                        modifier =
+                        Modifier.padding(padding)
+
                     ) {
 
+
+
                         composable("login") {
-                            LoginScreen(navController)
+
+
+                            LoginScreen(
+
+                                navController = navController,
+
+                                servidorListo = servidorListo
+
+                            )
+
                         }
+
+
 
                         composable("recuperar") {
-                            RecuperarPasswordScreen(navController)
+
+                            RecuperarPasswordScreen(
+                                navController
+                            )
+
                         }
+
+
 
                         composable("nueva_password") {
-                            NuevaPasswordScreen(navController)
+
+                            NuevaPasswordScreen(
+                                navController
+                            )
+
                         }
+
+
 
                         composable("home") {
-                            HomeScreen(navController)
+
+                            HomeScreen(
+                                navController
+                            )
+
                         }
+
+
 
                         composable("planes") {
-                            PlanesScreen(navController)
+
+                            PlanesScreen(
+                                navController
+                            )
+
                         }
+
+
 
                         composable("entrenadores") {
-                            TrainerScreen(navController)
+
+                            TrainerScreen(
+                                navController
+                            )
+
                         }
+
+
 
                         composable("yo") {
-                            ProfileScreen(navController)
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
 
+                            ProfileScreen(
+                                navController
+                            )
+
+                        }
+
+
+                    }
+
+                }
+
+
+            }
+
+
+        }
+
+
+    }
+    private fun aplicarIp(ip: String) {
+        SpringRepository.actualizarIp(ip)
+        LocalApi.actualizarIp(ip)
+    }
+
+}

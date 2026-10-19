@@ -6,6 +6,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
+import org.json.JSONObject
 import java.time.LocalDateTime
 
 object SpringRepository {
@@ -63,7 +64,53 @@ object SpringRepository {
 
         val response = client.newCall(request).execute()
 
-        return response.isSuccessful
+        if (!response.isSuccessful)
+            return false
+
+        // El API responde true/false en el body: hay que leerlo
+        // para no decirle al usuario que la entrada sirvió
+        // cuando en realidad el servidor la rechazó.
+        val contenido = response.body?.string()?.trim()
+
+        Log.d("ENTRADA", "HTTP ${response.code} body=$contenido")
+
+        return contenido == "true"
+    }
+
+    /** GET /api/clientes/{id} contra el escritorio (datos frescos). */
+    suspend fun obtenerCliente(idCliente: String): JSONObject? {
+
+        val request = Request.Builder()
+            .url("$BASE_URL/api/clientes/$idCliente")
+            .build()
+
+        val response = client.newCall(request).execute()
+
+        if (!response.isSuccessful)
+            return null
+
+        val contenido = response.body?.string()
+            ?: return null
+
+        return JSONObject(contenido)
+    }
+
+    /** GET /api/clientes/{id}/pago contra el escritorio. */
+    suspend fun ultimoPago(idCliente: String): JSONObject? {
+
+        val request = Request.Builder()
+            .url("$BASE_URL/api/clientes/$idCliente/pago")
+            .build()
+
+        val response = client.newCall(request).execute()
+
+        if (!response.isSuccessful)
+            return null
+
+        val contenido = response.body?.string()
+            ?: return null
+
+        return JSONObject(contenido)
     }
 
     suspend fun crearSolicitud(idCliente: String): Boolean {

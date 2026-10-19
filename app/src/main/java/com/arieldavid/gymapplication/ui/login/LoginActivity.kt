@@ -1,10 +1,11 @@
 import android.content.Context
+import android.util.Log
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -15,89 +16,213 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
+import com.arieldavid.gymapplication.local.QrLocal.LocalApi
+import com.arieldavid.gymapplication.local.QrLocal.NetworkScanner
+import com.arieldavid.gymapplication.local.database.DatabaseProvider
+import com.arieldavid.gymapplication.local.entity.ClientEntity
+import com.arieldavid.gymapplication.local.entity.MembresiaEntity
+import com.arieldavid.gymapplication.local.entity.TrainerEntity
 import com.arieldavid.gymapplication.ui.colores.MainBackground
 import com.arieldavid.gymapplication.ui.colores.TextoPrincipal
 import com.arieldavid.gymapplication.ui.colores.TextoSecundario
-
-import androidx.compose.runtime.*
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.input.VisualTransformation
-import com.arieldavid.gymapplication.AuthClass
-import com.journeyapps.barcodescanner.CaptureActivity
+import com.arieldavid.gymapplication.ui.home.PortraitCaptureActivity
+import com.arieldavid.gymapplication.ui.profile.idDesdeEnumTurno
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.launch
-import java.net.ConnectException
-import java.net.UnknownHostException
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material3.Icon
 
 @Composable
-fun LoginScreen(navController: NavController) {
-
-
-    var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-
-    var mostrarPassword by remember {
-        mutableStateOf(false)
-    }
-
-    var error by remember { mutableStateOf(false) }
-    var loading by remember { mutableStateOf(false) }
-    var usuarioEliminado by remember {
-        mutableStateOf(false)
-    }
-
-    var recordar by remember {
-        mutableStateOf(false)
-    }
+fun LoginScreen(
+    navController: NavController,
+    servidorListo: Boolean
+) {
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    LaunchedEffect(Unit) {
+    val scannerLauncher =
+        rememberLauncherForActivityResult(
+            contract = ScanContract()
+        ) { result ->
 
-        val prefs = context.getSharedPreferences(
-            "auth",
-            Context.MODE_PRIVATE
-        )
+            val contenido = result.contents
 
-        val recordarUsuario =
-            prefs.getBoolean("recordar", false)
+            if (contenido == null) {
 
-        if (recordarUsuario) {
+                Toast.makeText(
+                    context,
+                    "Escaneo cancelado",
+                    Toast.LENGTH_SHORT
+                ).show()
 
-            email = prefs.getString(
-                "saved_email",
-                ""
-            ) ?: ""
+                return@rememberLauncherForActivityResult
+            }
 
-            password = prefs.getString(
-                "saved_password",
-                ""
-            ) ?: ""
+            scope.launch {
 
-            recordar = true
+                try {
+
+                    // =========================
+                    // 1. VALIDAR QR
+                    // =========================
+
+                    val partes = contenido.split("|")
+
+                    if (
+                        partes.size != 3 ||
+                        partes[0] != "ALTAPINTA" ||
+                        partes[1] != "VINCULACION"
+                    ) {
+
+                        Toast.makeText(
+                            context,
+                            "QR de vinculación no válido",
+                            Toast.LENGTH_LONG
+                        ).show()
+
+                        return@launch
+                    }
+
+                    val idCliente = partes[2]
+
+                    // =========================
+                    // 2. PEDIR CLIENTE AL SERVIDOR
+                    // =========================
+
+                    val cliente = LocalApi
+                        .getService()
+                        .obtenerCliente(idCliente)
+
+                    // =========================
+                    // 3. GUARDAR EN ROOM
+                    // =========================
+
+                    val entity = ClientEntity(
+                        uuid = cliente.idClientes,
+                        nombre = cliente.nombre,
+                        numeroCliente = cliente.numeroCliente,
+                        email = cliente.email,
+                        idMembresia = cliente.id_membresia,
+                        idEntrenador = cliente.id_entrenador,
+                        // El API manda el turno como "turno_7_8", etc.
+                        idTurno = idDesdeEnumTurno(cliente.turno ?: "")
+                    )
+
+                    val database = DatabaseProvider.getDatabase(context)
+
+                    database.clientDAO().deleteAll()
+                    database.clientDAO().insert(entity)
+// =========================
+// 4. GUARDAR CLIENTE VINCULADO
+// =========================
+
+                    context
+                        .getSharedPreferences("auth", Context.MODE_PRIVATE)
+                        .edit()
+                        .putString("linked_client_id", cliente.idClientes)
+                        .putString("id_clientes", cliente.idClientes)
+                        .putString("nombre", cliente.nombre ?: "Usuario")
+                        .apply()
+
+// =========================
+// 5. SINCRONIZAR PLANES Y ENTRENADORES
+// =========================
+
+                    var sincronizado = true
+
+                    try {
+                        val api = LocalApi.getService()
+
+                        val entrenadores = api.obtenerEntrenadores()
+                        val membresias = api.obtenerMembresias()
+
+                        val trainersDao = database.TrainersDAO()
+                        trainersDao.deleteAll()
+                        entrenadores.forEach {
+                            trainersDao.insert(
+                                TrainerEntity(
+                                    id_entrenadores = it.id_entrenadores,
+                                    nombre = it.nombre,
+                                    descripcion = it.descripcion
+                                )
+                            )
+                        }
+
+                        database.MembresiaDAO().insertAll(
+                            membresias.map {
+                                MembresiaEntity(
+                                    id_membresia = it.id_membresia,
+                                    nombre = it.nombre,
+                                    precio_normal = it.precio_normal,
+                                    precio_transferencia = it.precio_transferencia,
+                                    beneficio = it.beneficio
+                                )
+                            }
+                        )
+
+                        Log.d("VINCULAR", "Sync OK: ${entrenadores.size} entrenadores, ${membresias.size} membresías")
+
+                    } catch (e: Exception) {
+                        sincronizado = false
+                        Log.e("VINCULAR", "Cliente vinculado, pero falló la sincronización", e)
+                    }
+                    try {
+                        val pago = LocalApi.getService().obtenerPago(cliente.idClientes)
+
+                        if (pago.fecha_sig_pago != null) {
+                            database.clientDAO().insert(
+                                entity.copy(fechaSigPago = pago.fecha_sig_pago)
+                            )
+                        }
+
+                        Log.d("VINCULAR", "Pago OK: ${pago.fecha_sig_pago} (${pago.estado})")
+
+                    } catch (e: Exception) {
+                        Log.e("VINCULAR", "No se pudo obtener el pago", e)
+                    }
+
+// =========================
+// 6. ENTRAR A HOME
+// =========================
+
+                    Toast.makeText(
+                        context,
+                        if (sincronizado) "Cliente vinculado correctamente"
+                        else "Vinculado, pero no se pudieron descargar planes y entrenadores",
+                        Toast.LENGTH_LONG
+                    ).show()
+
+                    navController.navigate("home") {
+                        popUpTo("login") {
+                            inclusive = true
+                        }
+                    }
+
+                } catch (e: Exception) {
+
+                    e.printStackTrace()
+
+                    Toast.makeText(
+                        context,
+                        "No se pudo vincular el cliente: ${e.message}",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
         }
-    }
-
 
     Column(
         modifier = Modifier
@@ -135,11 +260,12 @@ fun LoginScreen(navController: NavController) {
 
         Column(
             modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.Center
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
 
             Text(
-                text = "ACCESS PERFORMANCE",
+                text = "BIENVENIDO",
                 color = TextoPrincipal,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 2.sp
@@ -148,222 +274,45 @@ fun LoginScreen(navController: NavController) {
             Spacer(modifier = Modifier.height(6.dp))
 
             Text(
-                text = "Enter your credentials",
-                color = TextoSecundario
+                text = "Para iniciar tu sesión en el gimnasio acércate a recepción y escanea el código QR de vinculación.",
+                color = TextoSecundario,
+                fontSize = 16.sp,
+                textAlign = TextAlign.Center
             )
 
             Spacer(modifier = Modifier.height(30.dp))
 
-            // 🔹 EMAIL
-            Text("EMAIL", color = TextoSecundario)
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            OutlinedTextField(
-                value = email,
-                onValueChange = {
-                    email = it
-                    error = false
-                    usuarioEliminado = false
-                },
-                placeholder = { Text("example@email.com") },
-                modifier = Modifier.fillMaxWidth(),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Color.Gray,
-                    unfocusedBorderColor = Color.DarkGray,
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White
-                )
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // 🔹 PASSWORD
-            Text("PASSWORD", color = TextoSecundario)
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            OutlinedTextField(
-                value = password,
-                onValueChange = {
-                    password = it
-                    error = false
-                    usuarioEliminado = false
-                },
-
-                placeholder = {
-                    Text("••••••••")
-                },
-
-                modifier = Modifier.fillMaxWidth(),
-
-                visualTransformation =
-                if (mostrarPassword)
-                    VisualTransformation.None
-                else
-                    PasswordVisualTransformation(),
-
-                trailingIcon = {
-
-                    IconButton(
-                        onClick = {
-                            mostrarPassword = !mostrarPassword
-                        }
-                    ) {
-
-                        Icon(
-                            imageVector =
-                            if (mostrarPassword)
-                                Icons.Default.Visibility
-                            else
-                                Icons.Default.VisibilityOff,
-                            contentDescription = null
-                        )
-                    }
-                },
-
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Color.Gray,
-                    unfocusedBorderColor = Color.DarkGray,
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White
-                )
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-
-                Checkbox(
-                    checked = recordar,
-
-                    onCheckedChange = {
-                        recordar = it
-                    }
-                )
-
-                Text(
-                    "Recordarme",
-                    color = Color.White
-                )
-
-//                TextButton(
-//                    onClick = {
-//                        navController.navigate("recuperar")
-//                    }
-//                ) {
-//
-//                    Text(
-//                        "¿Olvidaste tu contraseña?"
-//                    )
-//                }
-            }
-            if (usuarioEliminado) {
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Text(
-                    text = "Su usuario ha sido eliminado. Para más información póngase en contacto con la administración del gimnasio.",
-                    color = Color.Red,
-                    fontSize = 15.sp
-                )
-            }
-
-            if (error) {
-                Text(
-                    text = "Email o contraseña incorrecta",
-                    color = Color.Red,
-                    fontSize = 15.sp
-                )
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
-
             Button(
                 onClick = {
+
                     scope.launch {
-                        loading = true
-                        try {
 
-                            val result = AuthClass.login(
+                        // Busca el servidor automáticamente (IP guardada o
+                        // escaneo de la subred) y lo deja configurado.
+                        val ok = NetworkScanner.asegurarServidor(context)
+
+                        if (!ok) {
+
+                            Toast.makeText(
                                 context,
-                                email,
-                                password
-                            )
+                                "No se encontró el servidor del gimnasio. Verifica que estés conectado al Wi-Fi del gimnasio e inténtalo de nuevo.",
+                                Toast.LENGTH_LONG
+                            ).show()
 
-                            when (result) {
-
-                                AuthClass.LoginResult.SUCCESS -> {
-
-                                    val prefs = context.getSharedPreferences(
-                                        "auth",
-                                        Context.MODE_PRIVATE
-                                    )
-
-                                    if (recordar) {
-
-                                        prefs.edit()
-                                            .putBoolean("recordar", true)
-                                            .putString("saved_email", email)
-                                            .putString("saved_password", password)
-                                            .apply()
-
-                                    } else {
-
-                                        prefs.edit()
-                                            .remove("saved_email")
-                                            .remove("saved_password")
-                                            .putBoolean("recordar", false)
-                                            .apply()
-                                    }
-
-                                    navController.navigate("home") {
-                                        popUpTo("login") {
-                                            inclusive = true
-                                        }
-                                    }
-                                }
-
-                                AuthClass.LoginResult.INVALID_CREDENTIALS -> {
-
-                                    error = true
-                                }
-
-                                AuthClass.LoginResult.ELIMINADO -> {
-
-                                    usuarioEliminado = true
-
-                                }
-                            }
-
-                        } catch (e: Exception) {
-
-                            e.printStackTrace()
-
-                            if (
-                                e is UnknownHostException ||
-                                e is ConnectException
-                            ) {
-
-                                Toast.makeText(
-                                    context,
-                                    "No hay conexión a internet",
-                                    Toast.LENGTH_SHORT
-                                ).show()
-
-                            } else {
-
-                                error = true
-                            }
+                            return@launch
                         }
 
-                        loading = false
+                        val options = ScanOptions().apply {
+                            setPrompt("Escanea el QR de vinculación de AltaPinta")
+                            setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                            setBeepEnabled(true)
+                            setOrientationLocked(true)
+                            captureActivity = PortraitCaptureActivity::class.java
+                        }
+
+                        scannerLauncher.launch(options)
                     }
                 },
-
-                enabled = !loading,
 
                 modifier = Modifier
                     .fillMaxWidth()
@@ -378,14 +327,21 @@ fun LoginScreen(navController: NavController) {
             ) {
 
                 Text(
-                    if (loading) "LOADING..." else "LOGIN",
+                    text = "VINCULAR CLIENTE",
                     color = Color.Black,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 2.sp
                 )
             }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text(
+                text = "El escaneo se realiza en recepción, conectado a la red Wi-Fi del gimnasio.",
+                color = TextoSecundario,
+                fontSize = 13.sp,
+                textAlign = TextAlign.Center
+            )
         }
     }
-
-
 }

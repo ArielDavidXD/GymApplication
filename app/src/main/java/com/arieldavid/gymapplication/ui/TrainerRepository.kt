@@ -83,7 +83,6 @@ object TrainerRepository {
                             TrainerEntity(
                                 id_entrenadores = it.id_entrenadores,
                                 nombre = it.nombre,
-                                telefono = it.telefono,
                                 descripcion = it.descripcion
                             )
                         )

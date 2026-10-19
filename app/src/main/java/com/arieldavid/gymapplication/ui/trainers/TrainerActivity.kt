@@ -89,7 +89,6 @@ fun TrainerScreen(navController: NavController) {
 
                 TrainerCard(
                     nombre = entrenador.nombre ?: "",
-                    telefono = entrenador.telefono ?: "",
                     descripcion = entrenador.descripcion ?: ""
                 )
             }
@@ -101,7 +100,6 @@ fun TrainerScreen(navController: NavController) {
 @Composable
 fun TrainerCard(
     nombre: String,
-    telefono: String,
     descripcion: String
 ) {
 
@@ -131,20 +129,6 @@ fun TrainerCard(
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 color = TextoPrincipal
-            )
-
-            Spacer(Modifier.height(16.dp))
-
-            Text(
-                "Teléfono",
-                color = TextoSecundario,
-                style = MaterialTheme.typography.labelMedium
-            )
-
-            Text(
-                telefono,
-                color = TextoPrincipal,
-                style = MaterialTheme.typography.bodyLarge
             )
 
             Spacer(Modifier.height(16.dp))

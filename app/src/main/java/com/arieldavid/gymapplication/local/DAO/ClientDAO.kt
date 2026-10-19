@@ -15,8 +15,12 @@ interface ClientDAO {
     @Query("SELECT * FROM Clientes LIMIT 1")
     suspend fun getProfile(): ClientEntity?
 
+    @Query("SELECT * FROM Clientes WHERE id_clientes = :uuid LIMIT 1")
+    suspend fun getByUUID(uuid: String): ClientEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(cliente: ClientEntity)
+
     @Query("DELETE FROM Clientes")
     suspend fun deleteAll()
 }

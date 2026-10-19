@@ -95,7 +95,6 @@ class HomeRepository {
                                 ClientEntity(
                                     uuid = actual.uuid,
                                     nombre = actual.nombre,
-                                    telefono = actual.telefono,
                                     email = actual.email,
                                     idMembresia = actual.idMembresia,
                                     numeroCliente = actual.numeroCliente,

@@ -1,21 +1,40 @@
 package com.arieldavid.gymapplication.local.QrLocal
 
 import android.content.Context
-import android.net.wifi.WifiManager
 import android.util.Log
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
 
 object NetworkScanner {
 
+    /**
+     * Busca el servidor del gimnasio (IP guardada o escaneo de la subred)
+     * y lo deja configurado en LocalApi y SpringRepository.
+     * Devuelve true si hay servidor disponible.
+     */
+    suspend fun asegurarServidor(context: Context): Boolean {
+
+        val ip = buscarServidor(context)
+            ?: return false
+
+        SpringRepository.actualizarIp(ip)
+        LocalApi.actualizarIp(ip)
+        Log.d("SCAN", "Servidor configurado: $ip")
+
+        return true
+    }
+
     private val client = OkHttpClient.Builder()
-        .connectTimeout(200, TimeUnit.MILLISECONDS)
-        .readTimeout(200, TimeUnit.MILLISECONDS)
+        .connectTimeout(1000, TimeUnit.MILLISECONDS)
+        .readTimeout(1000, TimeUnit.MILLISECONDS)
         .build()
 
     private fun obtenerRed(): String {
@@ -54,51 +73,84 @@ object NetworkScanner {
         throw Exception("No se encontró una red local")
     }
 
-    suspend fun buscarServidor(
-        context: Context
-    ): String? = coroutineScope {
+    // Prueba UNA ip: true solo si /api/ping responde GYM_SERVER
+    private fun probar(ip: String): Boolean {
+        return try {
+            val request = Request.Builder()
+                .url("http://$ip:8080/api/ping")
+                .build()
 
-        val red = obtenerRed()
+            client.newCall(request).execute().use { response ->
+                response.isSuccessful &&
+                        response.body?.string()?.trim() == "GYM_SERVER"
+            }
+        } catch (e: Exception) {
+            false
+        }
+    }
 
-        Log.d("SCAN", "Red encontrada: $red")
+    // Prueba las 254 ips en paralelo y devuelve la primera que responde
+    private suspend fun escanear(red: String): String? = coroutineScope {
+
+        val encontrado = CompletableDeferred<String?>()
 
         val tareas = (1..254).map { host ->
-
-            async(Dispatchers.IO) {
-
+            launch(Dispatchers.IO) {
                 val ip = "$red.$host"
-
-                Log.d("SCAN", "Probando $ip")
-
-                try {
-
-                    val request = Request.Builder()
-                        .url("http://$ip:8080/api/ping")
-                        .build()
-
-                    val response = client.newCall(request).execute()
-
-                    if (response.isSuccessful &&
-                        response.body!!.string() == "GYM_SERVER"
-                    ) {
-
-                        Log.d("SCAN", "ENCONTRADO $ip")
-
-                        return@async ip
-                    }
-
-                } catch (e: Exception) {
-                    Log.d("SCAN", "$ip -> ${e.message}")
+                if (probar(ip)) {
+                    encontrado.complete(ip)
                 }
-
-                null
             }
         }
 
-        val resultado = tareas.awaitAll().firstOrNull()
+        // Si terminan todas sin éxito, se completa con null
+        launch {
+            tareas.joinAll()
+            encontrado.complete(null)
+        }
 
-        Log.d("SCAN", "Resultado=$resultado")
+        val resultado = encontrado.await()
+
+        // Ya tenemos respuesta: no hace falta seguir probando
+        coroutineContext.cancelChildren()
 
         resultado
+    }
+
+    suspend fun buscarServidor(context: Context): String? {
+
+        val prefs = context.getSharedPreferences("server", Context.MODE_PRIVATE)
+
+        // 1. IP guardada
+        val guardada = prefs.getString("server_ip", null)
+
+        if (guardada != null) {
+            val sigue = withContext(Dispatchers.IO) { probar(guardada) }
+            if (sigue) {
+                Log.d("SCAN", "IP guardada OK: $guardada")
+                return guardada
+            }
+            Log.d("SCAN", "IP guardada $guardada ya no responde")
+        }
+
+        // 2. Escaneo de la subred
+        val red = try {
+            obtenerRed()
+        } catch (e: Exception) {
+            Log.d("SCAN", "Sin red local: ${e.message}")
+            return null
+        }
+
+        Log.d("SCAN", "Escaneando $red.x")
+
+        val ip = escanear(red)
+
+        Log.d("SCAN", "Resultado=$ip")
+
+        if (ip != null) {
+            prefs.edit().putString("server_ip", ip).apply()
+        }
+
+        return ip
     }
 }

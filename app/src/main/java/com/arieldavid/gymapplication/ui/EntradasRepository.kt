@@ -17,6 +17,13 @@ import java.time.LocalDateTime
 import java.time.LocalDate
 
 
+/** Resultado de registrar una entrada, con el motivo
+ *  para que el usuario sepa si sirvió o no. */
+data class ResultadoEntrada(
+    val ok: Boolean,
+    val mensaje: String
+)
+
 object EntradasRepository {
 
     private val client = OkHttpClient()
@@ -51,6 +58,7 @@ object EntradasRepository {
                 17 -> 9
                 18 -> 10
                 19 -> 11
+                20 -> 12
 
                 else -> null
             }
@@ -110,17 +118,68 @@ object EntradasRepository {
     suspend fun registrarEntrada(
         token: String,
         userId: String
-    ): Boolean {
+    ): ResultadoEntrada {
 
-        return try {
+        //========================================
+        // 1. INTENTAR SUPABASE
+        //========================================
 
-            registrarEntradaSupabase(token, userId)
+        try {
+
+            val ok = registrarEntradaSupabase(token, userId)
+
+            return if (ok)
+
+                ResultadoEntrada(
+                    true,
+                    "✅ Entrada registrada correctamente"
+                )
+
+            else
+
+                ResultadoEntrada(
+                    false,
+                    "No hay un turno a esta hora"
+                )
 
         } catch (e: Exception) {
 
-            Log.d("FALLBACK", "Registrando entrada por Spring")
+            Log.d(
+                "FALLBACK",
+                "Supabase no disponible. Entrada por Spring"
+            )
+        }
 
-            SpringRepository.registrarEntrada(userId)
+        //========================================
+        // 2. RESPALDO: SERVIDOR LOCAL
+        //========================================
+
+        return try {
+
+            val ok = SpringRepository.registrarEntrada(userId)
+
+            if (ok)
+
+                ResultadoEntrada(
+                    true,
+                    "✅ Entrada registrada correctamente"
+                )
+
+            else
+
+                ResultadoEntrada(
+                    false,
+                    "El servidor rechazó la entrada"
+                )
+
+        } catch (e: Exception) {
+
+            Log.e("ENTRADA", "Ambos caminos fallaron", e)
+
+            ResultadoEntrada(
+                false,
+                "No se pudo registrar la entrada: sin conexión"
+            )
         }
     }
 
@@ -140,6 +199,7 @@ object EntradasRepository {
             17 -> 9
             18 -> 10
             19 -> 11
+            20 -> 12
 
             else -> null
         }

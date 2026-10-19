@@ -22,6 +22,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.arieldavid.gymapplication.AuthClass
+import com.arieldavid.gymapplication.local.QrLocal.NetworkScanner
+import com.arieldavid.gymapplication.local.QrLocal.SpringRepository
 import com.arieldavid.gymapplication.local.database.DatabaseProvider
 import com.arieldavid.gymapplication.local.entity.ClientEntity
 import com.arieldavid.gymapplication.ui.PerfilRepository
@@ -32,13 +34,14 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import org.json.JSONObject
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-import androidx.compose.material.icons.filled.Phone
-import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Badge
+import androidx.compose.material.icons.filled.CardMembership
+import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.rememberScrollState
@@ -53,10 +56,13 @@ data class Cliente(
     val uuid: String,
 
     val nombre: String,
-    val telefono: String? = null,
     val id_membresia: Int? = null,
     val numero_cliente: Int? = null,
     val email: String? = null,
+    val id_entrenador: String? = null,
+    val id_turno: Int? = null,
+    val plan: String? = null,
+    val entrenador: String? = null,
     val Payment: List<Payment> = emptyList(),
     val eliminado: Boolean = false
 ) {
@@ -118,13 +124,30 @@ fun ProfileScreen(navController: NavController) {
 
         if (local != null) {
 
+            val planNombre = withContext(Dispatchers.IO) {
+                db.MembresiaDAO()
+                    .getAll()
+                    .firstOrNull { it.id_membresia == local.idMembresia }
+                    ?.nombre
+            }
+
+            val entrenadorNombre = withContext(Dispatchers.IO) {
+                db.TrainersDAO()
+                    .getAll()
+                    .firstOrNull { it.id_entrenadores == local.idEntrenador }
+                    ?.nombre
+            }
+
             perfil = Cliente(
                 uuid = local.uuid,
                 nombre = local.nombre ?: "",
-                telefono = local.telefono,
                 id_membresia = local.idMembresia,
                 numero_cliente = local.numeroCliente,
                 email = local.email,
+                id_entrenador = local.idEntrenador,
+                id_turno = local.idTurno,
+                plan = planNombre,
+                entrenador = entrenadorNombre,
                 Payment = listOf(
                     Payment(
                         fecha_sig_pago = local.fechaSigPago
@@ -205,16 +228,33 @@ fun ProfileScreen(navController: NavController) {
                             ClientEntity(
                                 uuid = cliente.uuid,
                                 nombre = cliente.nombre,
-                                telefono = cliente.telefono,
                                 idMembresia = cliente.id_membresia,
                                 numeroCliente = cliente.numero_cliente,
                                 email = cliente.email,
+                                idEntrenador = cliente.id_entrenador,
+                                idTurno = cliente.id_turno,
                                 fechaSigPago =
                                 cliente.Payment
                                     .firstOrNull()
                                     ?.fecha_sig_pago
                             )
                         )
+                    }
+
+                    // Resuelve el nombre del plan y del entrenador
+                    // desde las tablas locales.
+                    val planNombre = withContext(Dispatchers.IO) {
+                        db.MembresiaDAO()
+                            .getAll()
+                            .firstOrNull { it.id_membresia == cliente.id_membresia }
+                            ?.nombre
+                    }
+
+                    val entrenadorNombre = withContext(Dispatchers.IO) {
+                        db.TrainersDAO()
+                            .getAll()
+                            .firstOrNull { it.id_entrenadores == cliente.id_entrenador }
+                            ?.nombre
                     }
 
                     prefs.edit()
@@ -224,7 +264,10 @@ fun ProfileScreen(navController: NavController) {
                         )
                         .apply()
 
-                    perfil = cliente
+                    perfil = cliente.copy(
+                        plan = planNombre,
+                        entrenador = entrenadorNombre
+                    )
                 }
             }
 
@@ -243,6 +286,144 @@ fun ProfileScreen(navController: NavController) {
         } finally {
 
             loading = false
+        }
+
+        ///////////////////////////////////////////////////////
+        // 5. REFRESCO LOCAL: SI EL CELULAR ESTA EN LA MISMA RED
+        //    DEL GIMNASIO, EL ESCRITORIO TIENE LOS DATOS MAS FRESCOS
+        //    (se actualiza solo cuando hay un cambio: plan, turno,
+        //     entrenador, pago, etc.)
+        ///////////////////////////////////////////////////////
+
+        try {
+
+            // OJO: el API local busca por id_clientes (no por user_id,
+            // que es el UUID de auth de Supabase).
+            val idClienteLocal = prefs.getString("id_clientes", null)
+                ?: prefs.getString("linked_client_id", null)
+
+            if (idClienteLocal != null &&
+                NetworkScanner.asegurarServidor(context)
+            ) {
+
+                val cliLocal = withContext(Dispatchers.IO) {
+                    SpringRepository.obtenerCliente(idClienteLocal)
+                }
+
+                if (cliLocal != null) {
+
+                    val pagoLocal = withContext(Dispatchers.IO) {
+                        SpringRepository.ultimoPago(idClienteLocal)
+                    }
+
+                    val idTurnoLocal =
+                        idDesdeEnumTurno(cliLocal.optString("turno", ""))
+
+                    Log.d(
+                        "PERFIL_DEBUG",
+                        "LOCAL: idCliente=$idClienteLocal"
+                                + " turno='${cliLocal.optString("turno", "")}'"
+                                + " -> idTurno=$idTurnoLocal"
+                                + " entrenador=${cliLocal.optString("nombreEntrenador", "")}"
+                    )
+
+                    val fechaSig = pagoLocal
+                        ?.optString("fecha_sig_pago", "")
+                        ?.takeIf { it.isNotBlank() && it != "null" }
+
+                    // Datos que ya tenía Room: sirven de respaldo para no
+                    // borrar el turno/pago si el servidor no los mandó.
+                    val roomActual = withContext(Dispatchers.IO) {
+                        dao.getProfile()
+                    }
+
+                    val entity = ClientEntity(
+                        uuid = cliLocal.optString(
+                            "idClientes",
+                            idClienteLocal
+                        ),
+                        nombre = cliLocal.optString("nombre", ""),
+                        email = cliLocal
+                            .optString("email", "")
+                            .takeIf {
+                                it.isNotBlank() && it != "null"
+                            }
+                            ?: roomActual?.email,
+                        idMembresia = cliLocal
+                            .optInt("id_membresia", -1)
+                            .takeIf { it > 0 },
+                        numeroCliente = cliLocal
+                            .optInt("numeroCliente", -1)
+                            .takeIf { it > 0 },
+                        idEntrenador = cliLocal
+                            .optString("id_entrenador", "")
+                            .takeIf { it.isNotBlank() && it != "null" },
+                        idTurno = idTurnoLocal ?: roomActual?.idTurno,
+                        fechaSigPago = fechaSig
+                            ?: roomActual?.fechaSigPago
+                    )
+
+                    withContext(Dispatchers.IO) {
+
+                        dao.deleteAll()
+                        dao.insert(entity)
+                    }
+
+                    val planNombre = withContext(Dispatchers.IO) {
+                        db.MembresiaDAO()
+                            .getAll()
+                            .firstOrNull {
+                                it.id_membresia == entity.idMembresia
+                            }
+                            ?.nombre
+                    } ?: cliLocal
+                        .optString("nombreMembresia", "")
+                        .takeIf { it.isNotBlank() && it != "null" }
+
+                    val entrenadorNombre = withContext(Dispatchers.IO) {
+                        db.TrainersDAO()
+                            .getAll()
+                            .firstOrNull {
+                                it.id_entrenadores == entity.idEntrenador
+                            }
+                            ?.nombre
+                    } ?: cliLocal
+                        .optString("nombreEntrenador", "")
+                        .takeIf { it.isNotBlank() && it != "null" }
+
+                    perfil = Cliente(
+                        uuid = entity.uuid,
+                        nombre = entity.nombre ?: "",
+                        id_membresia = entity.idMembresia,
+                        numero_cliente = entity.numeroCliente,
+                        email = entity.email,
+                        id_entrenador = entity.idEntrenador,
+                        id_turno = entity.idTurno,
+                        plan = planNombre,
+                        entrenador = entrenadorNombre,
+                        Payment = listOf(
+                            Payment(
+                                fecha_sig_pago = entity.fechaSigPago
+                            )
+                        )
+                    )
+
+                    loading = false
+                    errorCarga = false
+
+                    Log.d(
+                        "PERFIL_DEBUG",
+                        "Perfil refrescado desde el servidor local"
+                    )
+                }
+            }
+
+        } catch (e: Exception) {
+
+            Log.e(
+                "PERFIL_DEBUG",
+                "Refresco local no disponible: ${e.message}"
+            )
         }
     }
     when {
@@ -629,26 +810,29 @@ fun formatDate(date: String): String {
                 HorizontalDivider()
 
                 InfoRow(
-                    Icons.Default.Phone,
-                    "Teléfono",
-                    cliente.telefono ?: "-"
-                )
-
-                HorizontalDivider()
-
-                InfoRow(
-                    Icons.Default.Email,
-                    "Correo",
-                    cliente.email ?: "-"
-                )
-
-                HorizontalDivider()
-
-                InfoRow(
                     Icons.Default.Badge,
                     "Número de Cliente",
                     cliente.numero_cliente?.toString() ?: "-"
                 )
+
+                HorizontalDivider()
+
+                InfoRow(
+                    Icons.Default.CardMembership,
+                    "Plan",
+                    cliente.plan ?: "-"
+                )
+
+                if (cliente.entrenador != null) {
+
+                    HorizontalDivider()
+
+                    InfoRow(
+                        Icons.Default.FitnessCenter,
+                        "Entrenador",
+                        cliente.entrenador!!
+                    )
+                }
             }
         }
     }
@@ -692,6 +876,72 @@ fun formatDate(date: String): String {
                     fontWeight = FontWeight.SemiBold
                 )
             }
+        }
+    }
+
+    /** Convierte el turno que manda el escritorio a su id.
+     *
+     *  El API manda el turno en dos formas posibles según
+     *  la versión del servidor:
+     *  - "Turno 14:00 - 15:00"   (toString del enum)
+     *  - "turno_02_03"           (name del enum)
+     *  Las dos se aceptan para que no dependa del jar.
+     */
+    fun idDesdeEnumTurno(valor: String): Int? {
+
+        // ----------------------------------------------------
+        // 1. FORMA "turno_02_03"
+        // ----------------------------------------------------
+
+        val porName = when (valor) {
+
+            "turno_7_8" -> 1
+            "turno_8_9" -> 2
+            "turno_9_10" -> 3
+            "turno_10_11" -> 4
+            "turno_11_12" -> 5
+            "turno_02_03" -> 6
+            "turno_03_04" -> 7
+            "turno_04_05" -> 8
+            "turno_05_06" -> 9
+            "turno_06_07" -> 10
+            "turno_07_08" -> 11
+            "turno_08_09" -> 12
+
+            else -> null
+        }
+
+        if (porName != null) return porName
+
+        // ----------------------------------------------------
+        // 2. FORMA "Turno 14:00 - 15:00": nos quedamos con la
+        //    hora de inicio. No hay turno de mañana y de tarde
+        //    que empiecen a la misma hora, así no hay empate.
+        // ----------------------------------------------------
+
+        val hora = Regex("""(\d{1,2}):\d{2}""")
+            .find(valor)
+            ?.groupValues
+            ?.get(1)
+            ?.toIntOrNull()
+            ?: return null
+
+        return when (hora) {
+
+            7 -> 1
+            8 -> 2
+            9 -> 3
+            10 -> 4
+            11 -> 5
+            14 -> 6
+            15 -> 7
+            16 -> 8
+            17 -> 9
+            18 -> 10
+            19 -> 11
+            20 -> 12
+
+            else -> null
         }
     }
 

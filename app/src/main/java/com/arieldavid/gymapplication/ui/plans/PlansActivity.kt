@@ -82,9 +82,12 @@ fun PlanesScreen(navController: NavController) {
 
         if (token == null) {
 
-            // Si ya existen datos locales, seguimos trabajando offline
-            if (membresias.isNotEmpty()) {
-                Log.d("PLANES", "Modo offline")
+            val linkedId = context
+                .getSharedPreferences("auth", Context.MODE_PRIVATE)
+                .getString("linked_client_id", null)
+
+            if (membresias.isNotEmpty() || linkedId != null) {
+                Log.d("PLANES", "Modo vinculado/offline (linked=$linkedId, membresias=${membresias.size})")
                 return@LaunchedEffect
             }
 

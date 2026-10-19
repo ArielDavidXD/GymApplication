@@ -39,7 +39,9 @@ import com.arieldavid.gymapplication.ui.theme.GymApplicationTheme
 import androidx.compose.runtime.*
 import com.arieldavid.gymapplication.AuthClass
 import com.arieldavid.gymapplication.SupabaseConfig
+import com.arieldavid.gymapplication.local.QrLocal.LocalApi
 import com.arieldavid.gymapplication.local.QrLocal.LocalQrRepository
+import com.arieldavid.gymapplication.local.QrLocal.NetworkScanner
 import com.arieldavid.gymapplication.local.QrLocal.SpringRepository
 import com.arieldavid.gymapplication.local.database.DatabaseProvider
 import com.arieldavid.gymapplication.local.entity.ClientEntity
@@ -104,15 +106,33 @@ fun HomeScreen(navController: NavController) {
         //////////////////////////////////////////////////////
         // 3. MODO OFFLINE
         //////////////////////////////////////////////////////
+        val linkedId = prefs.getString("linked_client_id", null)
+
+        Log.d("HOME_DBG", "token=$token userId=$userId linked=$linkedId fechaPago=$fechaPago")
 
         if (token == null || userId == null) {
 
-            if (fechaPago != "-") {
+            if (linkedId != null) {
+                try {
+                    val pago = LocalApi.getService().obtenerPago(linkedId)
+                    val dao = DatabaseProvider.getDatabase(context).clientDAO()
+                    val actual = dao.getByUUID(linkedId)
 
-                Log.d("HOME", "Modo offline")
-
+                    if (actual != null && pago.fecha_sig_pago != null) {
+                        dao.insert(actual.copy(fechaSigPago = pago.fecha_sig_pago))
+                        fechaPago = pago.fecha_sig_pago
+                    }
+                } catch (e: Exception) {
+                    Log.d("HOME", "Sin conexión al servidor local, uso datos de Room")
+                }
                 return@LaunchedEffect
             }
+            if (linkedId != null || fechaPago != "-") {
+                Log.d("HOME", "Modo vinculado/offline (linked=$linkedId)")
+                return@LaunchedEffect
+            }
+
+            Log.d("HOME_DBG", "REDIRIGIENDO A LOGIN desde Home")
 
             navController.navigate("login") {
                 popUpTo(0)
@@ -292,6 +312,13 @@ fun QRSection(
                     //=================== INTENTAR SPRING ===================
 
                     try {
+
+                        // Asegura que el servidor esté configurado (IP guardada
+                        // o búsqueda automática en la subred). Si no hay servidor
+                        // local, lanzamos para ir al respaldo de Supabase.
+                        if (!NetworkScanner.asegurarServidor(context)) {
+                            throw Exception("Sin servidor local")
+                        }
 
                         val respuesta = withContext(Dispatchers.IO) {
 
@@ -566,7 +593,7 @@ fun QRSection(
                             return@launch
                         }
 
-                        val ok = withContext(Dispatchers.IO) {
+                        val resultado = withContext(Dispatchers.IO) {
                             EntradasRepository.registrarEntrada(
                                 token,
                                 idCliente
@@ -575,10 +602,7 @@ fun QRSection(
 
                         Toast.makeText(
                             context,
-                            if (ok)
-                                "Entrada registrada correctamente"
-                            else
-                                "Error registrando entrada",
+                            resultado.mensaje,
                             Toast.LENGTH_LONG
                         ).show()
 

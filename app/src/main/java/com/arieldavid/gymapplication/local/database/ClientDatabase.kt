@@ -10,7 +10,7 @@ import com.arieldavid.gymapplication.local.entity.MembresiaEntity
 import com.arieldavid.gymapplication.local.entity.TrainerEntity
 
 
-@Database(entities = [ClientEntity::class, MembresiaEntity::class, TrainerEntity::class], version = 9)
+@Database(entities = [ClientEntity::class, MembresiaEntity::class, TrainerEntity::class], version = 10)
 abstract class ClientDatabase :RoomDatabase() {
     abstract fun clientDAO(): ClientDAO
     abstract fun MembresiaDAO(): MembresiaDAO
