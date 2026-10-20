@@ -117,6 +117,22 @@ object NetworkScanner {
         resultado
     }
 
+    /**
+     * Solo prueba la IP guardada (un pedido rapido, sin escanear la subred).
+     * Sirve para refrescos periodicos: si el servidor esta apagado
+     * no conviene escanear la red cada pocos segundos.
+     * Devuelve la IP si responde, o null.
+     */
+    suspend fun probarGuardada(context: Context): String? {
+
+        val prefs = context.getSharedPreferences("server", Context.MODE_PRIVATE)
+        val guardada = prefs.getString("server_ip", null) ?: return null
+
+        return withContext(Dispatchers.IO) {
+            if (probar(guardada)) guardada else null
+        }
+    }
+
     suspend fun buscarServidor(context: Context): String? {
 
         val prefs = context.getSharedPreferences("server", Context.MODE_PRIVATE)

@@ -6,6 +6,8 @@ import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.QrCodeScanner
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.util.Log
 import android.widget.Toast
@@ -58,8 +60,22 @@ import okhttp3.Request
 import org.json.JSONArray
 import java.text.SimpleDateFormat
 import java.time.LocalDate
+import java.util.Date
 import java.util.Locale
 
+// Refresco automatico del Home
+private const val INTERVALO_REFRESCO_MS = 30_000L     // consulta cada 30 segundos
+private const val INTERVALO_ESCANEO_MS = 5 * 60_000L  // escaneo de red completo: cada 5 minutos
+
+// True si el telefono esta en la WiFi del gimnasio: ahi esta la PC con la API local
+private fun enRedLocal(context: Context): Boolean {
+
+    val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
+
+    return caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+}
 
 // 🔥 HOME
 @RequiresApi(Build.VERSION_CODES.O)
@@ -74,6 +90,15 @@ fun HomeScreen(navController: NavController) {
         mutableStateOf("-")
     }
 
+    // Hora en que se pudieron actualizar los datos por ultima vez
+    var ultimaActualizacion by remember {
+        mutableStateOf<String?>(null)
+    }
+
+    // Cuando se escaneo la red por ultima vez (para no escanear cada pocos segundos)
+    var ultimoEscaneo by remember {
+        mutableStateOf(0L)
+    }
 
     val repository = remember {
         HomeRepository()
@@ -160,6 +185,100 @@ fun HomeScreen(navController: NavController) {
         }
     }
 
+    //////////////////////////////////////////////////////
+    // REFRESCO PERIODICO
+    // Trae la fecha de pago mas fresca mientras el Home este abierto:
+    // 1) Si hay WiFi y responde la PC del gimnasio, usa la API local
+    //    (es la base de datos mas actualizada).
+    // 2) Si no, usa Supabase.
+    // Devuelve true si pudo actualizar.
+    //////////////////////////////////////////////////////
+    suspend fun refrescarFechaPago(): Boolean {
+
+        if (enRedLocal(context)) {
+
+            // IP guardada que responde: rapido (1 pedido)
+            var ip = NetworkScanner.probarGuardada(context)
+
+            if (ip != null) {
+
+                SpringRepository.actualizarIp(ip)
+                LocalApi.actualizarIp(ip)
+
+            } else if (System.currentTimeMillis() - ultimoEscaneo >= INTERVALO_ESCANEO_MS) {
+
+                // Escaneo completo de la subred: solo cada 5 minutos
+                ultimoEscaneo = System.currentTimeMillis()
+
+                if (NetworkScanner.asegurarServidor(context)) {
+                    ip = "servidor"
+                }
+            }
+
+            if (ip != null) {
+
+                val prefs = context.getSharedPreferences("auth", Context.MODE_PRIVATE)
+                val idCliente = prefs.getString("linked_client_id", null)
+                    ?: DatabaseProvider.getDatabase(context).clientDAO().getProfile()?.uuid
+
+                if (idCliente != null) {
+
+                    val pago = LocalApi.getService().obtenerPago(idCliente)
+                    val fecha = pago.fecha_sig_pago
+
+                    if (!fecha.isNullOrBlank()) {
+
+                        val dao = DatabaseProvider.getDatabase(context).clientDAO()
+                        val actual = dao.getByUUID(idCliente)
+
+                        if (actual != null) dao.insert(actual.copy(fechaSigPago = fecha))
+
+                        fechaPago = fecha
+                        return true
+                    }
+                }
+            }
+        }
+
+        // Sin servidor local: Supabase (si hay sesion iniciada)
+        val token = AuthClass.getAccessToken(context)
+        val userId = context.getSharedPreferences("auth", Context.MODE_PRIVATE)
+            .getString("user_id", null)
+
+        if (token != null && userId != null) {
+
+            val fecha = repository.obtenerFechaPago(context, token, userId)
+
+            if (fecha != "-" && fecha.isNotBlank()) {
+                fechaPago = fecha
+                return true
+            }
+        }
+
+        return false
+    }
+
+    // Cada pocos segundos: si pudo actualizar, guarda la hora
+    LaunchedEffect(Unit) {
+
+        while (true) {
+
+            delay(INTERVALO_REFRESCO_MS)
+
+            val actualizado = try {
+                refrescarFechaPago()
+            } catch (e: Exception) {
+                Log.e("HOME", "Error refrescando: ${e.message}")
+                false
+            }
+
+            if (actualizado) {
+                ultimaActualizacion =
+                    SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+            }
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -174,6 +293,15 @@ fun HomeScreen(navController: NavController) {
         Spacer(modifier = Modifier.height(20.dp))
 
         Greeting()
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Text(
+            text = if (ultimaActualizacion == null) "Sin actualizar aún"
+            else "Última actualización: $ultimaActualizacion",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
 
         Spacer(modifier = Modifier.height(20.dp))
 
