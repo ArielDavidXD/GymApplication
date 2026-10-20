@@ -100,6 +100,14 @@ fun HomeScreen(navController: NavController) {
         mutableStateOf(0L)
     }
 
+    // Nombre que muestra el saludo (se actualiza con el refresco)
+    var nombreUI by remember {
+        mutableStateOf(
+            context.getSharedPreferences("auth", Context.MODE_PRIVATE)
+                .getString("nombre", null) ?: "Usuario"
+        )
+    }
+
     val repository = remember {
         HomeRepository()
     }
@@ -187,13 +195,55 @@ fun HomeScreen(navController: NavController) {
 
     //////////////////////////////////////////////////////
     // REFRESCO PERIODICO
-    // Trae la fecha de pago mas fresca mientras el Home este abierto:
+    // Trae los datos del cliente (pago, nombre, plan, etc.)
+    // mientras el Home este abierto:
     // 1) Si hay WiFi y responde la PC del gimnasio, usa la API local
     //    (es la base de datos mas actualizada).
     // 2) Si no, usa Supabase.
-    // Devuelve true si pudo actualizar.
+    // Devuelve true si pudo actualizar algo.
     //////////////////////////////////////////////////////
-    suspend fun refrescarFechaPago(): Boolean {
+
+    // Guarda los datos del cliente en Room y en el saludo.
+    // Actualiza valores; NO toca el esquema de la tabla.
+    suspend fun guardarCliente(
+        uuid: String,
+        nombre: String?,
+        email: String?,
+        idMembresia: Int?,
+        idEntrenador: String?,
+        numeroCliente: Int?
+    ) {
+
+        if (uuid.isBlank()) return
+
+        val dao = DatabaseProvider.getDatabase(context).clientDAO()
+
+        val actual = dao.getByUUID(uuid) ?: ClientEntity(uuid = uuid)
+
+        dao.insert(
+            actual.copy(
+                nombre = nombre?.takeIf { it.isNotBlank() } ?: actual.nombre,
+                email = email?.takeIf { it.isNotBlank() } ?: actual.email,
+                idMembresia = idMembresia ?: actual.idMembresia,
+                idEntrenador = idEntrenador?.takeIf { it.isNotBlank() } ?: actual.idEntrenador,
+                numeroCliente = numeroCliente ?: actual.numeroCliente
+            )
+        )
+
+        if (!nombre.isNullOrBlank() && nombre != nombreUI) {
+
+            nombreUI = nombre
+
+            context.getSharedPreferences("auth", Context.MODE_PRIVATE)
+                .edit()
+                .putString("nombre", nombre)
+                .apply()
+        }
+    }
+
+    suspend fun refrescarDatos(): Boolean {
+
+        var actualizado = false
 
         if (enRedLocal(context)) {
 
@@ -223,39 +273,100 @@ fun HomeScreen(navController: NavController) {
 
                 if (idCliente != null) {
 
-                    val pago = LocalApi.getService().obtenerPago(idCliente)
-                    val fecha = pago.fecha_sig_pago
+                    // Proximo pago
+                    try {
 
-                    if (!fecha.isNullOrBlank()) {
+                        val pago = LocalApi.getService().obtenerPago(idCliente)
+                        val fecha = pago.fecha_sig_pago
 
-                        val dao = DatabaseProvider.getDatabase(context).clientDAO()
-                        val actual = dao.getByUUID(idCliente)
+                        if (!fecha.isNullOrBlank()) {
 
-                        if (actual != null) dao.insert(actual.copy(fechaSigPago = fecha))
+                            val dao = DatabaseProvider.getDatabase(context).clientDAO()
+                            val actual = dao.getByUUID(idCliente)
 
-                        fechaPago = fecha
-                        return true
+                            if (actual != null) dao.insert(actual.copy(fechaSigPago = fecha))
+
+                            fechaPago = fecha
+                            actualizado = true
+                        }
+
+                    } catch (e: Exception) {
+                        Log.d("HOME", "Pago local no disponible: ${e.message}")
+                    }
+
+                    // Nombre y demas datos del cliente
+                    try {
+
+                        val cli = LocalApi.getService().obtenerCliente(idCliente)
+
+                        guardarCliente(
+                            uuid = cli.idClientes,
+                            nombre = cli.nombre,
+                            email = cli.email,
+                            idMembresia = cli.id_membresia,
+                            idEntrenador = cli.id_entrenador,
+                            numeroCliente = cli.numeroCliente
+                        )
+
+                        actualizado = true
+
+                    } catch (e: Exception) {
+                        Log.d("HOME", "Cliente local no disponible: ${e.message}")
                     }
                 }
             }
         }
 
-        // Sin servidor local: Supabase (si hay sesion iniciada)
-        val token = AuthClass.getAccessToken(context)
-        val userId = context.getSharedPreferences("auth", Context.MODE_PRIVATE)
-            .getString("user_id", null)
+        // Sin servidor local: Supabase (si hay sesion iniciada).
+        // Solo si la local no actualizo nada: lo local es mas fresco
+        // y Supabase podria pisar datos nuevos con datos de hace 20 s.
+        if (!actualizado) {
 
-        if (token != null && userId != null) {
+            val token = AuthClass.getAccessToken(context)
+            val userId = context.getSharedPreferences("auth", Context.MODE_PRIVATE)
+                .getString("user_id", null)
 
-            val fecha = repository.obtenerFechaPago(context, token, userId)
+            if (token != null && userId != null) {
 
-            if (fecha != "-" && fecha.isNotBlank()) {
-                fechaPago = fecha
-                return true
+                try {
+
+                    val fecha = repository.obtenerFechaPago(context, token, userId)
+
+                    if (fecha != "-" && fecha.isNotBlank()) {
+                        fechaPago = fecha
+                        actualizado = true
+                    }
+
+                } catch (e: Exception) {
+                    Log.e("HOME", "Error refrescando pago: ${e.message}")
+                }
+
+                try {
+
+                    val cli = repository.obtenerClienteOnline(token, userId)
+
+                    if (cli != null) {
+
+                        guardarCliente(
+                            uuid = cli.optString("id_clientes"),
+                            nombre = cli.optString("nombre"),
+                            email = cli.optString("email"),
+                            idMembresia = cli.optInt("id_membresia", -1).takeIf { it > 0 },
+                            idEntrenador = cli.optString("id_entrenador")
+                                .takeIf { it.isNotBlank() && it != "null" },
+                            numeroCliente = cli.optInt("numero_cliente", -1).takeIf { it > 0 }
+                        )
+
+                        actualizado = true
+                    }
+
+                } catch (e: Exception) {
+                    Log.e("HOME", "Error refrescando cliente: ${e.message}")
+                }
             }
         }
 
-        return false
+        return actualizado
     }
 
     // Cada pocos segundos: si pudo actualizar, guarda la hora
@@ -266,7 +377,7 @@ fun HomeScreen(navController: NavController) {
             delay(INTERVALO_REFRESCO_MS)
 
             val actualizado = try {
-                refrescarFechaPago()
+                refrescarDatos()
             } catch (e: Exception) {
                 Log.e("HOME", "Error refrescando: ${e.message}")
                 false
@@ -292,7 +403,7 @@ fun HomeScreen(navController: NavController) {
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        Greeting()
+        Greeting(nombreUI)
 
         Spacer(modifier = Modifier.height(4.dp))
 
@@ -359,13 +470,7 @@ fun TopBar() {
 // 👋 SALUDO
 //////////////////////////////////////////////////////////
 @Composable
-fun Greeting() {
-
-    val context = LocalContext.current
-
-    val prefs = context.getSharedPreferences("auth", Context.MODE_PRIVATE)
-
-    val nombre = prefs.getString("nombre", "Usuario")
+fun Greeting(nombre: String) {
 
     Column {
 

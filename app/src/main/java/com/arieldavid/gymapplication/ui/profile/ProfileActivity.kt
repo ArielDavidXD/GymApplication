@@ -369,6 +369,13 @@ fun ProfileScreen(navController: NavController) {
                         dao.insert(entity)
                     }
 
+                    // Mantener el saludo del Home al dia
+                    if (!entity.nombre.isNullOrBlank()) {
+                        prefs.edit()
+                            .putString("nombre", entity.nombre)
+                            .apply()
+                    }
+
                     val planNombre = withContext(Dispatchers.IO) {
                         db.MembresiaDAO()
                             .getAll()

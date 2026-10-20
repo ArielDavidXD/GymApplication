@@ -11,6 +11,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
+import org.json.JSONObject
 
 class HomeRepository {
 
@@ -139,5 +140,54 @@ class HomeRepository {
         }
 
         return cliente?.fechaSigPago ?: "-"
+    }
+
+    /**
+     * Trae los datos del cliente desde Supabase (por user_id).
+     * Devuelve el primer JSONObject o null si no hay respuesta.
+     */
+    suspend fun obtenerClienteOnline(
+        token: String,
+        userId: String
+    ): JSONObject? {
+
+        return withContext(Dispatchers.IO) {
+
+            try {
+
+                val url =
+                    "${SupabaseConfig.URL}/rest/v1/Clientes" +
+                            "?user_id=eq.$userId" +
+                            "&select=id_clientes,nombre,email," +
+                            "id_membresia,id_entrenador,numero_cliente"
+
+                val request = Request.Builder()
+                    .url(url)
+                    .addHeader("apikey", SupabaseConfig.API_KEY)
+                    .addHeader("Authorization", "Bearer $token")
+                    .get()
+                    .build()
+
+                val client = OkHttpClient()
+
+                client.newCall(request).execute().use { response ->
+
+                    val body = response.body?.string()
+
+                    if (response.isSuccessful && !body.isNullOrBlank()) {
+
+                        JSONArray(body)
+                            .takeIf { it.length() > 0 }
+                            ?.getJSONObject(0)
+
+                    } else null
+                }
+
+            } catch (e: Exception) {
+
+                Log.e("HOME", "Error trayendo cliente de Supabase: ${e.message}")
+                null
+            }
+        }
     }
 }
