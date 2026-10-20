@@ -222,11 +222,15 @@ fun HomeScreen(navController: NavController) {
 
         dao.insert(
             actual.copy(
+                // El nombre nunca se borra (dato critico para mostrar)
                 nombre = nombre?.takeIf { it.isNotBlank() } ?: actual.nombre,
-                email = email?.takeIf { it.isNotBlank() } ?: actual.email,
-                idMembresia = idMembresia ?: actual.idMembresia,
-                idEntrenador = idEntrenador?.takeIf { it.isNotBlank() } ?: actual.idEntrenador,
-                numeroCliente = numeroCliente ?: actual.numeroCliente
+                // Email y entrenador: null = el cliente no tiene (se borra)
+                email = email?.takeIf { it.isNotBlank() },
+                idEntrenador = idEntrenador
+                    ?.takeIf { it.isNotBlank() && it != "null" },
+                // Plan y numero: si no vino el dato, se respalda el anterior
+                idMembresia = idMembresia?.takeIf { it > 0 } ?: actual.idMembresia,
+                numeroCliente = numeroCliente?.takeIf { it > 0 } ?: actual.numeroCliente
             )
         )
 
