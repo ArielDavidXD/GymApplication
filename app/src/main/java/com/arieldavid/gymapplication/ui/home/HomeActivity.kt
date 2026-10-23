@@ -67,14 +67,30 @@ import java.util.Locale
 private const val INTERVALO_REFRESCO_MS = 30_000L     // consulta cada 30 segundos
 private const val INTERVALO_ESCANEO_MS = 5 * 60_000L  // escaneo de red completo: cada 5 minutos
 
-// True si el telefono esta en la WiFi del gimnasio: ahi esta la PC con la API local
-private fun enRedLocal(context: Context): Boolean {
+// True si el telefono tiene WiFi conectada, aunque esa WiFi no tenga
+// internet. Se revisan TODAS las redes: si la WiFi no esta validada,
+// Android puede usar los datos moviles como red "activa" y igual
+// queremos llegar a la PC del gimnasio.
+private fun hayWifi(context: Context): Boolean {
+
+    val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+
+    return cm.allNetworks.any { red ->
+        cm.getNetworkCapabilities(red)?.let { caps ->
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                    caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+        } == true
+    }
+}
+
+// True si la red activa tiene internet de verdad (para Supabase)
+private fun hayInternet(context: Context): Boolean {
 
     val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
 
-    return caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+    return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
 }
 
 // 🔥 HOME
@@ -249,82 +265,83 @@ fun HomeScreen(navController: NavController) {
 
         var actualizado = false
 
-        if (enRedLocal(context)) {
+        // 1) Servidor local. La IP guardada se prueba SIEMPRE: es un pedido
+        //    de 1 segundo y funciona sin internet (es red local). Asi
+        //    tambien anda cuando la WiFi del gimnasio no tiene internet
+        //    y el telefono esta usando los datos moviles como red activa.
+        var ip = NetworkScanner.probarGuardada(context)
 
-            // IP guardada que responde: rapido (1 pedido)
-            var ip = NetworkScanner.probarGuardada(context)
+        if (ip != null) {
 
-            if (ip != null) {
+            SpringRepository.actualizarIp(ip)
+            LocalApi.actualizarIp(ip)
 
-                SpringRepository.actualizarIp(ip)
-                LocalApi.actualizarIp(ip)
+        } else if (hayWifi(context) &&
+            System.currentTimeMillis() - ultimoEscaneo >= INTERVALO_ESCANEO_MS) {
 
-            } else if (System.currentTimeMillis() - ultimoEscaneo >= INTERVALO_ESCANEO_MS) {
+            // Escaneo completo de la subred: solo con WiFi y cada 5 minutos
+            ultimoEscaneo = System.currentTimeMillis()
 
-                // Escaneo completo de la subred: solo cada 5 minutos
-                ultimoEscaneo = System.currentTimeMillis()
-
-                if (NetworkScanner.asegurarServidor(context)) {
-                    ip = "servidor"
-                }
+            if (NetworkScanner.asegurarServidor(context)) {
+                ip = "servidor"
             }
+        }
 
-            if (ip != null) {
+        if (ip != null) {
 
-                val prefs = context.getSharedPreferences("auth", Context.MODE_PRIVATE)
-                val idCliente = prefs.getString("linked_client_id", null)
-                    ?: DatabaseProvider.getDatabase(context).clientDAO().getProfile()?.uuid
+            val prefs = context.getSharedPreferences("auth", Context.MODE_PRIVATE)
+            val idCliente = prefs.getString("linked_client_id", null)
+                ?: DatabaseProvider.getDatabase(context).clientDAO().getProfile()?.uuid
 
-                if (idCliente != null) {
+            if (idCliente != null) {
 
-                    // Proximo pago
-                    try {
+                // Proximo pago
+                try {
 
-                        val pago = LocalApi.getService().obtenerPago(idCliente)
-                        val fecha = pago.fecha_sig_pago
+                    val pago = LocalApi.getService().obtenerPago(idCliente)
+                    val fecha = pago.fecha_sig_pago
 
-                        if (!fecha.isNullOrBlank()) {
+                    if (!fecha.isNullOrBlank()) {
 
-                            val dao = DatabaseProvider.getDatabase(context).clientDAO()
-                            val actual = dao.getByUUID(idCliente)
+                        val dao = DatabaseProvider.getDatabase(context).clientDAO()
+                        val actual = dao.getByUUID(idCliente)
 
-                            if (actual != null) dao.insert(actual.copy(fechaSigPago = fecha))
+                        if (actual != null) dao.insert(actual.copy(fechaSigPago = fecha))
 
-                            fechaPago = fecha
-                            actualizado = true
-                        }
-
-                    } catch (e: Exception) {
-                        Log.d("HOME", "Pago local no disponible: ${e.message}")
-                    }
-
-                    // Nombre y demas datos del cliente
-                    try {
-
-                        val cli = LocalApi.getService().obtenerCliente(idCliente)
-
-                        guardarCliente(
-                            uuid = cli.idClientes,
-                            nombre = cli.nombre,
-                            email = cli.email,
-                            idMembresia = cli.id_membresia,
-                            idEntrenador = cli.id_entrenador,
-                            numeroCliente = cli.numeroCliente
-                        )
-
+                        fechaPago = fecha
                         actualizado = true
-
-                    } catch (e: Exception) {
-                        Log.d("HOME", "Cliente local no disponible: ${e.message}")
                     }
+
+                } catch (e: Exception) {
+                    Log.d("HOME", "Pago local no disponible: ${e.message}")
+                }
+
+                // Nombre y demas datos del cliente
+                try {
+
+                    val cli = LocalApi.getService().obtenerCliente(idCliente)
+
+                    guardarCliente(
+                        uuid = cli.idClientes,
+                        nombre = cli.nombre,
+                        email = cli.email,
+                        idMembresia = cli.id_membresia,
+                        idEntrenador = cli.id_entrenador,
+                        numeroCliente = cli.numeroCliente
+                    )
+
+                    actualizado = true
+
+                } catch (e: Exception) {
+                    Log.d("HOME", "Cliente local no disponible: ${e.message}")
                 }
             }
         }
 
-        // Sin servidor local: Supabase (si hay sesion iniciada).
-        // Solo si la local no actualizo nada: lo local es mas fresco
-        // y Supabase podria pisar datos nuevos con datos de hace 20 s.
-        if (!actualizado) {
+        // 2) Sin servidor local y con internet: Supabase (si hay sesion).
+        //    Solo si la local no actualizo nada: lo local es mas fresco
+        //    y Supabase podria pisar datos nuevos con datos de hace 20 s.
+        if (!actualizado && hayInternet(context)) {
 
             val token = AuthClass.getAccessToken(context)
             val userId = context.getSharedPreferences("auth", Context.MODE_PRIVATE)
@@ -373,12 +390,11 @@ fun HomeScreen(navController: NavController) {
         return actualizado
     }
 
-    // Cada pocos segundos: si pudo actualizar, guarda la hora
+    // Primera consulta apenas se abre el Home, despues cada 30 s.
+    // Si pudo actualizar, guarda la hora.
     LaunchedEffect(Unit) {
 
         while (true) {
-
-            delay(INTERVALO_REFRESCO_MS)
 
             val actualizado = try {
                 refrescarDatos()
@@ -391,6 +407,8 @@ fun HomeScreen(navController: NavController) {
                 ultimaActualizacion =
                     SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
             }
+
+            delay(INTERVALO_REFRESCO_MS)
         }
     }
 
