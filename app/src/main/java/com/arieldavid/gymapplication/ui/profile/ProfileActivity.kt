@@ -3,7 +3,6 @@ package com.arieldavid.gymapplication.ui.profile
 import android.content.Context
 import android.os.Build
 import android.util.Log
-import android.widget.Toast
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -18,7 +17,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.arieldavid.gymapplication.AuthClass
@@ -81,14 +79,6 @@ fun ProfileScreen(navController: NavController) {
 
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-
-    var mostrarDialogo by remember {
-        mutableStateOf(false)
-    }
-
-    var nuevaPassword by remember {
-        mutableStateOf("")
-    }
 
     var perfil by remember {
         mutableStateOf<Cliente?>(null)
@@ -535,20 +525,6 @@ fun ProfileScreen(navController: NavController) {
                     Button(
 
                         onClick = {
-                            mostrarDialogo = true
-                        },
-
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(55.dp)
-                    ) {
-
-                        Text("CAMBIAR CONTRASEÑA")
-                    }
-
-                    Button(
-
-                        onClick = {
 
                             scope.launch {
 
@@ -590,76 +566,6 @@ fun ProfileScreen(navController: NavController) {
 
     }
 
-    if (mostrarDialogo) {
-
-        AlertDialog(
-
-            onDismissRequest = {
-                mostrarDialogo = false
-            },
-
-            title = {
-                Text("Nueva contraseña")
-            },
-
-            text = {
-
-                OutlinedTextField(
-                    value = nuevaPassword,
-
-                    onValueChange = {
-                        nuevaPassword = it
-                    },
-
-                    visualTransformation =
-                    PasswordVisualTransformation()
-                )
-            },
-
-            confirmButton = {
-
-                TextButton(
-
-                    onClick = {
-
-                        mostrarDialogo = false
-
-                        if (nuevaPassword.length < 6) {
-
-                            Toast.makeText(
-                                context,
-                                "Mínimo 6 caracteres",
-                                Toast.LENGTH_SHORT
-                            ).show()
-
-                            return@TextButton
-                        }
-
-                        scope.launch {
-
-                            val ok = AuthClass
-                                .cambiarPassword(
-                                    context,
-                                    nuevaPassword
-                                )
-
-                            Toast.makeText(
-                                context,
-                                if (ok)
-                                    "Contraseña actualizada"
-                                else
-                                    "Error",
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        }
-                    }
-                ) {
-
-                    Text("Guardar")
-                }
-            }
-        )
-    }
 }
 
 @RequiresApi(Build.VERSION_CODES.O)

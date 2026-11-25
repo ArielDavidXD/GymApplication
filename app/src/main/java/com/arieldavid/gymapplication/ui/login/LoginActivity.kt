@@ -1,4 +1,8 @@
 import android.content.Context
+import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.provider.Settings
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -43,6 +47,21 @@ import com.arieldavid.gymapplication.ui.profile.idDesdeEnumTurno
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.launch
+
+// True si el telefono tiene WiFi conectada. Se revisan TODAS las redes,
+// igual que en Home: si la WiFi no esta validada, Android puede usar datos
+// moviles como red activa y nosotros igual queremos la red del gimnasio.
+private fun hayWifi(context: Context): Boolean {
+
+    val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+
+    return cm.allNetworks.any { red ->
+        cm.getNetworkCapabilities(red)?.let { caps ->
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                    caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+        } == true
+    }
+}
 
 @Composable
 fun LoginScreen(
@@ -284,6 +303,33 @@ fun LoginScreen(
 
             Button(
                 onClick = {
+
+                    // Sin WiFi no hay servidor local: mandamos al menu de
+                    // WiFi del telefono para que se conecte al del gimnasio.
+                    if (!hayWifi(context)) {
+
+                        Toast.makeText(
+                            context,
+                            "Conectate al Wi-Fi del gimnasio para vincularte",
+                            Toast.LENGTH_LONG
+                        ).show()
+
+                        try {
+                            context.startActivity(
+                                Intent(Settings.ACTION_WIFI_SETTINGS).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                            )
+                        } catch (e: Exception) {
+                            context.startActivity(
+                                Intent(Settings.ACTION_SETTINGS).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                            )
+                        }
+
+                        return@Button
+                    }
 
                     scope.launch {
 
